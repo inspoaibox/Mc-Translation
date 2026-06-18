@@ -1,9 +1,20 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh-CN" class="auth-pending">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>管理后台 - 翻译API</title>
+    <script>
+        (function () {
+            try {
+                if (!localStorage.getItem('token')) {
+                    window.location.replace('/admin/login');
+                }
+            } catch (error) {
+                window.location.replace('/admin/login');
+            }
+        })();
+    </script>
     <link rel="stylesheet" href="/static/css/admin.css">
 </head>
 <body>

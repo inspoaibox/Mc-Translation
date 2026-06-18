@@ -12,8 +12,32 @@ const headers = {
     'Content-Type': 'application/json'
 };
 
+function revealAdmin() {
+    document.documentElement.classList.remove('auth-pending');
+    document.documentElement.classList.add('auth-ready');
+}
+
+async function verifyAdminSession() {
+    try {
+        const response = await fetch('/admin/settings', { headers });
+        if (!response.ok) {
+            throw new Error('Invalid admin session');
+        }
+        return true;
+    } catch (error) {
+        localStorage.removeItem('token');
+        window.location.replace('/admin/login');
+        return false;
+    }
+}
+
 // 页面导航
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
+    const verified = await verifyAdminSession();
+    if (!verified) return;
+
+    revealAdmin();
+
     document.querySelectorAll('.nav-item').forEach(item => {
         item.addEventListener('click', async (e) => {
             e.preventDefault();
@@ -1022,38 +1046,58 @@ async function loadModels() {
                 <h3 class="card-title">模型配置</h3>
             </div>
 
-            <div style="padding: 1.5rem;">
-                <h4 style="margin-bottom: 1rem;">模型存储路径</h4>
-                <p style="color: #666; margin-bottom: 0.5rem;">
-                    <strong>HuggingFace 缓存:</strong> ~/.cache/huggingface/
-                </p>
-                <p style="color: #666; margin-bottom: 1rem;">
-                    <strong>Argos 包:</strong> ~/.local/share/argos-translate/
-                </p>
+            <div class="model-config-grid">
+                <section class="model-config-panel">
+                    <h4>模型存储路径</h4>
+                    <div class="model-path-list">
+                        <div class="model-path-item">
+                            <span class="model-path-label">HuggingFace 缓存</span>
+                            <span class="model-path-value">~/.cache/huggingface/</span>
+                        </div>
+                        <div class="model-path-item">
+                            <span class="model-path-label">Argos 语言包</span>
+                            <span class="model-path-value">~/.local/share/argos-translate/</span>
+                        </div>
+                        <div class="model-path-item">
+                            <span class="model-path-label">CTranslate2 模型</span>
+                            <span class="model-path-value">./models/ctranslate2/</span>
+                        </div>
+                    </div>
+                </section>
 
-                <h4 style="margin-top: 2rem; margin-bottom: 1rem;">加速配置</h4>
-                <div style="background: #f8fafc; padding: 1rem; border-radius: 0.5rem; margin-bottom: 1rem;">
-                    <label style="display: flex; align-items: center; cursor: pointer;">
-                        <input type="checkbox" id="use-gpu" ${modelConfig.use_gpu ? 'checked' : ''} style="margin-right: 0.5rem;">
-                        <span>启用 GPU 加速 (需要 CUDA)</span>
-                    </label>
-                    <p style="color: #666; font-size: 0.875rem; margin-top: 0.5rem; margin-left: 1.5rem;">
-                        当前设备: <strong>${modelConfig.device || 'cpu'}</strong> | 修改后需要重启服务
-                    </p>
-                </div>
+                <section class="model-config-panel">
+                    <h4>运行配置</h4>
+                    <div class="config-field">
+                        <label>加速设备</label>
+                        <div class="toggle-row">
+                            <div class="toggle-text">
+                                <strong>启用 GPU 加速</strong>
+                                <span>需要服务器 CUDA 环境，保存后重启服务生效</span>
+                            </div>
+                            <label class="switch" title="启用 GPU 加速">
+                                <input type="checkbox" id="use-gpu" ${modelConfig.use_gpu ? 'checked' : ''}>
+                                <span class="switch-slider"></span>
+                            </label>
+                        </div>
+                        <div class="field-hint">当前设备: <strong>${modelConfig.device || 'cpu'}</strong></div>
+                    </div>
 
-                <h4 style="margin-top: 2rem; margin-bottom: 1rem;">默认模型</h4>
-                <select id="default-model" class="form-control" style="max-width: 360px;">
-                    <option value="argos" ${defaultModel === 'argos' ? 'selected' : ''}>Argos (快速)</option>
-                    <option value="marian" ${defaultModel === 'marian' ? 'selected' : ''}>MarianMT (准确)</option>
-                    <option value="m2m100" ${defaultModel === 'm2m100' ? 'selected' : ''}>M2M100 (多语言)</option>
-                    <option value="m2m100_1_2b" ${defaultModel === 'm2m100_1_2b' ? 'selected' : ''}>M2M100 1.2B (高精度)</option>
-                    <option value="nllb" ${defaultModel === 'nllb' ? 'selected' : ''}>NLLB-200 (多语言)</option>
-                </select>
+                    <div class="config-field">
+                        <label for="default-model">默认模型</label>
+                        <select id="default-model" class="form-control">
+                            <option value="argos" ${defaultModel === 'argos' ? 'selected' : ''}>Argos (快速)</option>
+                            <option value="marian" ${defaultModel === 'marian' ? 'selected' : ''}>MarianMT (准确)</option>
+                            <option value="m2m100" ${defaultModel === 'm2m100' ? 'selected' : ''}>M2M100 (多语言)</option>
+                            <option value="m2m100_1_2b" ${defaultModel === 'm2m100_1_2b' ? 'selected' : ''}>M2M100 1.2B (高精度)</option>
+                            <option value="nllb" ${defaultModel === 'nllb' ? 'selected' : ''}>NLLB-200 (多语言)</option>
+                        </select>
+                        <div class="field-hint">未显式指定模型的 API 请求会使用这里的默认模型</div>
+                    </div>
 
-                <button class="btn btn-primary" onclick="saveModelConfig()" style="padding: 0.625rem 1.25rem; background: var(--primary-color); color: white; border: none; border-radius: 0.5rem; cursor: pointer;">
-                    保存配置
-                </button>
+                    <button class="btn btn-primary" onclick="saveModelConfig()">
+                        保存配置
+                    </button>
+                </section>
             </div>
         </div>
 
