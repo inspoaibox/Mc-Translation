@@ -18,6 +18,7 @@ from .auth import get_current_user_from_token, security
 from .config import config
 from .database import SystemConfig
 from .db_session import get_db
+from .models.ct2_utils import get_ct2_model_dir, get_huggingface_snapshot_path, has_ct2_model_files
 
 router = APIRouter()
 download_tasks = {}
@@ -266,6 +267,7 @@ async def get_models_status(current_user=Depends(require_admin_user)):
     """获取所有模型状态和已下载的模型"""
     argos_available = importlib.util.find_spec("argostranslate") is not None
     transformers_available = importlib.util.find_spec("transformers") is not None
+    ctranslate2_available = importlib.util.find_spec("ctranslate2") is not None
 
     # 检查 Argos 已安装的包
     argos_packages = []
@@ -331,6 +333,10 @@ async def get_models_status(current_user=Depends(require_admin_user)):
     m2m100_large_downloaded = len(m2m100_large_models) > 0
     nllb_downloaded = len(nllb_models) > 0
     marian_ready_pairs = []
+    marian_ct2_models = [
+        model for model in marian_models
+        if has_ct2_model_files(model)
+    ]
     for model in marian_models:
         name = model.split("/")[-1]
         if name.startswith("opus-mt-"):
@@ -357,6 +363,9 @@ async def get_models_status(current_user=Depends(require_admin_user)):
             "size": "200-300MB",
             "downloaded_models": marian_models,
             "cached_models": marian_cache_models,
+            "ctranslate2_available": ctranslate2_available,
+            "ctranslate2_models": marian_ct2_models,
+            "backend": config.MARIAN_BACKEND,
             "cache_incomplete": len(marian_cache_models) > len(marian_models),
             "ready_pairs": sorted(marian_ready_pairs),
             "has_downloads": marian_downloaded
@@ -482,10 +491,12 @@ async def list_available_marian_models(current_user=Depends(require_admin_user))
             # 简单检查：看缓存目录是否存在该模型
             model_dir_name = model["model_name"].replace("/", "--")
             model["downloaded"] = has_huggingface_model_files(model["model_name"])
+            model["ctranslate2_converted"] = has_ct2_model_files(model["model_name"])
     except:
         # 如果检查失败，都标记为未下载
         for model in models:
             model["downloaded"] = False
+            model["ctranslate2_converted"] = False
 
     return {"models": models}
 
@@ -540,6 +551,81 @@ def download_marian_model_task(task_id: str, model_name: str):
 
     except Exception as e:
         stop_event.set()
+        fail_download_task(task_id, str(e))
+
+@router.post("/admin/models/marian/convert-ct2")
+async def convert_marian_model_to_ct2(
+    model_name: str,
+    current_user=Depends(require_admin_user)
+):
+    """将已下载的 MarianMT 模型转换为 CTranslate2 本地模型。"""
+    if not has_huggingface_model_files(model_name):
+        raise HTTPException(status_code=400, detail=f"模型 {model_name} 尚未完整下载，不能转换")
+
+    if importlib.util.find_spec("ctranslate2") is None:
+        raise HTTPException(status_code=500, detail="当前环境未安装 ctranslate2")
+
+    task_id = create_download_task("marian_ct2", model_name)
+    run_threaded_download(convert_marian_model_to_ct2_task, task_id, model_name)
+
+    return {
+        "success": True,
+        "task_id": task_id,
+        "message": f"模型 {model_name} CTranslate2 转换任务已开始"
+    }
+
+def convert_marian_model_to_ct2_task(task_id: str, model_name: str):
+    try:
+        from ctranslate2.converters import TransformersConverter
+
+        update_download_task(task_id, status="running", percent=5, message="检查本地 MarianMT 模型...")
+        snapshot_path = get_huggingface_snapshot_path(model_name)
+        if not snapshot_path:
+            raise RuntimeError(f"未找到 {model_name} 的本地 HuggingFace snapshot")
+
+        output_dir = get_ct2_model_dir(model_name)
+        os.makedirs(os.path.dirname(output_dir), exist_ok=True)
+
+        update_download_task(task_id, percent=20, message="准备 CTranslate2 转换器...")
+        copy_candidates = [
+            "tokenizer.json",
+            "tokenizer_config.json",
+            "source.spm",
+            "target.spm",
+            "vocab.json",
+            "sentencepiece.bpe.model",
+            "spiece.model",
+            "special_tokens_map.json",
+        ]
+        copy_files = [
+            file_name
+            for file_name in copy_candidates
+            if os.path.exists(os.path.join(snapshot_path, file_name))
+        ]
+
+        converter = TransformersConverter(
+            snapshot_path,
+            copy_files=copy_files
+        )
+
+        update_download_task(
+            task_id,
+            percent=45,
+            message=f"正在转换为 CTranslate2 ({config.MARIAN_CT2_COMPUTE_TYPE})..."
+        )
+        converter.convert(
+            output_dir,
+            quantization=config.MARIAN_CT2_COMPUTE_TYPE,
+            force=True
+        )
+
+        update_download_task(task_id, percent=95, message="校验 CTranslate2 模型文件...")
+        if not has_ct2_model_files(model_name):
+            raise RuntimeError("转换结束，但未检测到 CTranslate2 model.bin/config.json")
+
+        finish_download_task(task_id, f"模型 {model_name} 已转换为 CTranslate2: {output_dir}")
+
+    except Exception as e:
         fail_download_task(task_id, str(e))
 
 @router.post("/admin/models/m2m100/download")

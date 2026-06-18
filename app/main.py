@@ -26,6 +26,7 @@ from .schemas import (
     AdminSettings, PasswordChangeRequest
 )
 from .models import ArgosTranslator, MarianTranslator, M2M100Translator, NLLBTranslator
+from .models.metrics import TranslationMetrics, TranslationResult
 from .database import User, APIKey, TranslationLog, SystemConfig
 from .db_session import get_db, init_db
 from .auth import (
@@ -38,6 +39,49 @@ from .model_routes import router as model_router
 translators = {}
 start_time = time.time()
 download_status = {}  # 记录模型下载状态
+
+
+def warm_up_translator(model_name: str, translator):
+    if not hasattr(translator, "warm_up"):
+        return
+
+    try:
+        translator.warm_up(config.TRANSFORMER_WARMUP_PAIRS)
+    except Exception as e:
+        print(f"{model_name} 预热失败: {str(e)}")
+
+
+def response_from_result(
+    result: TranslationResult,
+    model_name: str,
+    source_lang: str,
+    target_lang: str
+) -> TranslationResponse:
+    return TranslationResponse(
+        translated_text=result.text or "",
+        model_used=model_name,
+        source_lang=source_lang,
+        target_lang=target_lang,
+        success=True,
+        model_backend=result.metrics.backend,
+        actual_model_name=result.metrics.actual_model_name,
+        timing=result.metrics.to_response_ms(),
+    )
+
+
+def run_translation_with_metrics(translator, text: str, source_lang: str, target_lang: str) -> TranslationResult:
+    if hasattr(translator, "translate_with_metrics"):
+        return translator.translate_with_metrics(text, source_lang, target_lang)
+
+    start = time.perf_counter()
+    translated_text = translator.translate(text=text, source_lang=source_lang, target_lang=target_lang)
+    return TranslationResult(
+        translated_text,
+        TranslationMetrics(
+            backend=translator.__class__.__name__,
+            inference_time=time.perf_counter() - start,
+        )
+    )
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -102,11 +146,6 @@ async def lifespan(app: FastAPI):
         print(f"PyTorch CPU 线程数: {config.TORCH_CPU_THREADS}")
 
     translators["argos"] = ArgosTranslator()
-    Thread(
-        target=translators["argos"].warm_up,
-        args=(config.ARGOS_WARMUP_PAIRS,),
-        daemon=True
-    ).start()
     translators["marian"] = MarianTranslator(device=config.DEVICE)
     translators["m2m100"] = M2M100Translator(device=config.DEVICE)
     translators["m2m100_1_2b"] = M2M100Translator(
@@ -117,6 +156,22 @@ async def lifespan(app: FastAPI):
         model_name=config.NLLB_MODEL,
         device=config.DEVICE
     )
+
+    if config.MODEL_WARMUP_ENABLED:
+        Thread(
+            target=translators["argos"].warm_up,
+            args=(config.ARGOS_WARMUP_PAIRS,),
+            daemon=True
+        ).start()
+
+        for warmup_model in config.TRANSFORMER_WARMUP_MODELS:
+            translator = translators.get(warmup_model)
+            if translator:
+                Thread(
+                    target=warm_up_translator,
+                    args=(warmup_model, translator),
+                    daemon=True
+                ).start()
     print("[OK] 翻译器初始化完成")
 
     yield
@@ -290,8 +345,9 @@ async def admin_test_translate(
         }
 
         # 执行翻译。模型推理是阻塞任务，放入线程池避免卡住事件循环。
-        translated_text = await run_in_threadpool(
-            translator.translate,
+        result = await run_in_threadpool(
+            run_translation_with_metrics,
+            translator,
             text=request.text,
             source_lang=request.source_lang,
             target_lang=request.target_lang
@@ -300,16 +356,10 @@ async def admin_test_translate(
         # 清除状态
         download_status.pop(f"{model_name}_{request.source_lang}_{request.target_lang}", None)
 
-        if translated_text is None:
+        if result.text is None:
             raise HTTPException(status_code=400, detail=f"模型 {model_name} 翻译失败或不支持该语言对")
 
-        return TranslationResponse(
-            translated_text=translated_text,
-            model_used=model_name,
-            source_lang=request.source_lang,
-            target_lang=request.target_lang,
-            success=True
-        )
+        return response_from_result(result, model_name, request.source_lang, request.target_lang)
 
     except HTTPException:
         raise
@@ -440,6 +490,13 @@ async def list_translation_logs(
             "success": log.success,
             "error_message": log.error_message,
             "response_time_ms": round((log.response_time or 0) * 1000, 2),
+            "model_backend": log.model_backend,
+            "actual_model_name": log.actual_model_name,
+            "model_load_ms": round((log.model_load_time or 0) * 1000, 2),
+            "inference_ms": round((log.inference_time or 0) * 1000, 2),
+            "format_ms": round((log.format_time or 0) * 1000, 2),
+            "segment_count": log.segment_count or 0,
+            "batch_count": log.batch_count or 0,
         })
 
     return {
@@ -574,7 +631,7 @@ async def translate(
     """翻译接口"""
     start = time.time()
     model_name = request.model or config.DEFAULT_MODEL
-    translated_text = None
+    result = TranslationResult(None, TranslationMetrics())
 
     async def record_translation_log(success: bool, error_message: str | None = None):
         response_time = time.time() - start
@@ -586,7 +643,14 @@ async def translate(
             char_count=len(request.text),
             success=success,
             error_message=error_message,
-            response_time=response_time
+            response_time=response_time,
+            model_backend=result.metrics.backend,
+            actual_model_name=result.metrics.actual_model_name,
+            model_load_time=result.metrics.model_load_time,
+            inference_time=result.metrics.inference_time,
+            format_time=result.metrics.format_time,
+            segment_count=result.metrics.segment_count,
+            batch_count=result.metrics.batch_count
         )
         db.add(log)
         await db.commit()
@@ -604,25 +668,20 @@ async def translate(
             raise HTTPException(status_code=500, detail=f"模型 {model_name} 未初始化")
 
         # 执行翻译。模型推理是阻塞任务，放入线程池避免卡住事件循环。
-        translated_text = await run_in_threadpool(
-            translator.translate,
+        result = await run_in_threadpool(
+            run_translation_with_metrics,
+            translator,
             text=request.text,
             source_lang=request.source_lang,
             target_lang=request.target_lang
         )
 
-        if translated_text is None:
+        if result.text is None:
             raise HTTPException(status_code=400, detail=f"模型 {model_name} 翻译失败或不支持该语言对")
 
         await record_translation_log(success=True)
 
-        return TranslationResponse(
-            translated_text=translated_text,
-            model_used=model_name,
-            source_lang=request.source_lang,
-            target_lang=request.target_lang,
-            success=True
-        )
+        return response_from_result(result, model_name, request.source_lang, request.target_lang)
 
     except HTTPException as e:
         await record_translation_log(success=False, error_message=str(e.detail))

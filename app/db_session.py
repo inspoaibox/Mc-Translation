@@ -32,3 +32,28 @@ async def init_db():
     """初始化数据库"""
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await ensure_lightweight_migrations(conn)
+
+
+async def ensure_lightweight_migrations(conn):
+    """Apply additive SQLite migrations for deployments without Alembic."""
+    if not config.DATABASE_URL.startswith("sqlite"):
+        return
+
+    result = await conn.exec_driver_sql("PRAGMA table_info(translation_logs)")
+    existing_columns = {row[1] for row in result.fetchall()}
+    required_columns = {
+        "model_backend": "VARCHAR",
+        "actual_model_name": "VARCHAR",
+        "model_load_time": "FLOAT DEFAULT 0",
+        "inference_time": "FLOAT DEFAULT 0",
+        "format_time": "FLOAT DEFAULT 0",
+        "segment_count": "INTEGER DEFAULT 0",
+        "batch_count": "INTEGER DEFAULT 0",
+    }
+
+    for column_name, column_type in required_columns.items():
+        if column_name not in existing_columns:
+            await conn.exec_driver_sql(
+                f"ALTER TABLE translation_logs ADD COLUMN {column_name} {column_type}"
+            )

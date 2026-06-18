@@ -1,6 +1,6 @@
 # 本地翻译 API v2.0
 
-🔒 **企业级安全翻译 API** - 整合 Argos Translate、MarianMT、M2M100 三个翻译模型，提供带认证、速率限制、日志统计的完整解决方案。
+🔒 **企业级安全翻译 API** - 整合 Argos Translate、MarianMT、M2M100、NLLB 多个本地翻译模型，提供带认证、速率限制、日志统计的完整解决方案。
 
 ## ✨ 核心特性
 
@@ -12,8 +12,10 @@
 - **审计日志** - 完整的调用记录
 
 ### 🚀 功能
-- **多模型支持** - Argos、MarianMT、M2M100
+- **多模型支持** - Argos、MarianMT、M2M100、M2M100 1.2B、NLLB-200
 - **明确模型选择** - 指定模型后只使用该模型，失败时直接返回错误
+- **性能诊断** - 翻译响应和调用日志记录加载、推理、格式处理耗时
+- **MarianMT 加速** - 支持将已下载 MarianMT 转换为 CTranslate2 int8 本地推理
 - **在线测试** - Web 界面测试翻译功能
 - **统计分析** - 实时查看调用统计
 - **完整文档** - 自动生成 API 文档
@@ -55,10 +57,13 @@ SECRET_KEY=your-random-secret-key-here-change-this
 ADMIN_USERNAME=admin
 ADMIN_PASSWORD=your_secure_password
 
-# API 速率限制
-API_RATE_LIMIT=100
-API_RATE_LIMIT_PERIOD=3600
+# 模型性能
+MODEL_WARMUP_ENABLED=true
+TRANSFORMER_WARMUP_MODELS=marian
+MARIAN_BACKEND=auto
 ```
+
+API 限流默认值在管理后台“系统设置”里配置，不再写死到 `.env`。
 
 ### 3. 启动服务
 
@@ -129,6 +134,7 @@ data = {
 response = requests.post(url, json=data, headers=headers)
 result = response.json()
 print(result["translated_text"])
+print(result.get("timing"))
 ```
 
 ### JavaScript
@@ -461,22 +467,49 @@ pip install torch torchvision torchaudio --index-url https://download.pytorch.or
 
 首次运行会下载模型，后续使用缓存：
 - Argos: 按需下载语言包
-- MarianMT: ~/.cache/huggingface
-- M2M100: ~/.cache/huggingface
+- MarianMT: `~/.cache/huggingface`
+- MarianMT CTranslate2: `./models/ctranslate2`，已被 `.gitignore` 忽略
+- M2M100 / NLLB: `~/.cache/huggingface`
 
-### 3. Transformers 翻译速度参数
+### 3. 翻译速度优化
 
-MarianMT、M2M100、NLLB 使用 `model.generate()` 本地推理，CPU 上会明显慢于 Argos。可在 `.env` 中调整：
+Argos 是轻量离线翻译包，通常会比 PyTorch Transformers 快。MarianMT、M2M100、NLLB 默认使用本地 `model.generate()`，CPU 上会明显慢于 Argos。可在 `.env` 中调整：
 
 ```env
 TRANSLATION_MAX_NEW_TOKENS=128
 TRANSLATION_BATCH_SIZE=8
 TORCH_CPU_THREADS=0
+MODEL_WARMUP_ENABLED=true
+TRANSFORMER_WARMUP_MODELS=marian
+TRANSFORMER_WARMUP_PAIRS=zh-en,en-zh
+MARIAN_BACKEND=auto
+CTRANSLATE2_MODELS_DIR=./models/ctranslate2
+MARIAN_CT2_COMPUTE_TYPE=int8
 ```
 
 - `TRANSLATION_MAX_NEW_TOKENS`: 单段最大生成长度，越大越慢；短句会自动按输入长度降低上限。
 - `TRANSLATION_BATCH_SIZE`: 多行普通文本会批量送入模型，提高吞吐。
 - `TORCH_CPU_THREADS`: `0` 表示使用 PyTorch 默认线程；小机器可尝试 `2` 或 `4`，避免线程调度过重。
+- `MODEL_WARMUP_ENABLED`: 启动后后台预热模型，减少第一个客户请求承担的加载成本。
+- `TRANSFORMER_WARMUP_MODELS`: 默认只预热 `marian`，避免启动时加载 M2M100/NLLB 这类大模型；需要时可设为 `marian,m2m100,nllb`。
+- `MARIAN_BACKEND`: `auto` 会优先使用已转换的 CTranslate2 模型；也可设为 `transformers` 或 `ctranslate2`。
+- `MARIAN_CT2_COMPUTE_TYPE`: CPU 推荐 `int8`；GPU 可按环境改为 `float16` 或 `int8_float16`。
+
+管理后台“模型管理”中，MarianMT 模型下载完成后可以点击“转换 CT2”。转换只使用本地已下载模型，不会在翻译请求中联网。转换完成后 `MARIAN_BACKEND=auto` 会优先调用 CTranslate2。
+
+`/translate` 响应会返回可选 `timing` 字段，调用日志也会展示拆分耗时：
+
+```json
+{
+  "model_backend": "ctranslate2",
+  "actual_model_name": "Helsinki-NLP/opus-mt-zh-en",
+  "timing": {
+    "model_load_ms": 0.21,
+    "inference_ms": 35.4,
+    "format_ms": 0.18
+  }
+}
+```
 
 修改后重启服务：
 

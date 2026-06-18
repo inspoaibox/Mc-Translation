@@ -4,7 +4,9 @@ Argos Translate 模型封装
 import argostranslate.package
 import argostranslate.translate
 from typing import Dict, Optional
+import time
 from .formatting import translate_preserving_line_format
+from .metrics import TranslationMetrics, TranslationResult
 
 class ArgosTranslator:
     """Argos 翻译器"""
@@ -54,24 +56,47 @@ class ArgosTranslator:
         Returns:
             翻译后的文本，失败返回 None
         """
+        return self.translate_with_metrics(text, source_lang, target_lang).text
+
+    def translate_with_metrics(self, text: str, source_lang: str, target_lang: str) -> TranslationResult:
+        metrics = TranslationMetrics(backend="argos", actual_model_name=f"{source_lang}-{target_lang}")
+
         try:
             pair = f"{source_lang}-{target_lang}"
+            load_start = time.perf_counter()
             translation = self._translations.get(pair)
 
             if not translation:
                 # 管理后台刚安装语言包后，当前进程可能还没刷新缓存。
                 self.refresh_installed_languages()
                 translation = self._translations.get(pair)
+            metrics.model_load_time = time.perf_counter() - load_start
 
             if not translation:
                 print(f"Argos 未安装语言包: {source_lang} -> {target_lang}")
-                return None
+                return TranslationResult(None, metrics)
 
-            return translate_preserving_line_format(text, translation.translate)
+            inference_time = 0.0
+
+            def translate_segment(segment: str) -> Optional[str]:
+                nonlocal inference_time
+                segment_start = time.perf_counter()
+                translated = translation.translate(segment)
+                inference_time += time.perf_counter() - segment_start
+                metrics.segment_count += 1
+                return translated
+
+            format_start = time.perf_counter()
+            translated_text = translate_preserving_line_format(text, translate_segment)
+            format_total = time.perf_counter() - format_start
+            metrics.inference_time = inference_time
+            metrics.format_time = max(0.0, format_total - inference_time)
+
+            return TranslationResult(translated_text, metrics)
 
         except Exception as e:
             print(f"Argos 翻译失败: {str(e)}")
-            return None
+            return TranslationResult(None, metrics)
 
     def is_available(self, source_lang: str, target_lang: str) -> bool:
         """检查语言对是否可用"""

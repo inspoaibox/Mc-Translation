@@ -829,7 +829,7 @@ async function loadModels() {
             : { use_gpu: false, default_model: 'argos', available_models: ['argos', 'marian', 'm2m100'] };
         const defaultModel = modelConfig.default_model || 'argos';
         const marianDownloadStatus = status.marian.has_downloads
-            ? `<span style="color: #10b981;">✓ ${status.marian.downloaded_models.length} 个模型</span><br><small style="color: #666;">${status.marian.downloaded_models.slice(0, 2).map(m => m.split('/').pop()).join(', ')}${status.marian.downloaded_models.length > 2 ? '...' : ''}</small>`
+            ? `<span style="color: #10b981;">✓ ${status.marian.downloaded_models.length} 个模型</span><br><small style="color: #666;">${status.marian.downloaded_models.slice(0, 2).map(m => m.split('/').pop()).join(', ')}${status.marian.downloaded_models.length > 2 ? '...' : ''}</small><br><small style="color: #0f766e;">CT2: ${status.marian.ctranslate2_models?.length || 0} 个 · ${status.marian.backend || 'auto'}</small>`
             : status.marian.cache_incomplete
                 ? '<span style="color: #f59e0b;">⚠ 缓存不完整</span><br><small style="color: #666;">缺少模型权重文件</small>'
                 : '<span style="color: #f59e0b;">⚠ 未下载</span>';
@@ -902,7 +902,7 @@ async function loadModels() {
                             <td>
                                 ${marianDownloadStatus}
                             </td>
-                            <td>
+                            <td data-download-card>
                                 <button class="btn btn-sm" style="padding: 0.25rem 0.75rem; font-size: 0.875rem; background: #10b981; color: white; border: none; border-radius: 0.375rem; cursor: pointer;" onclick="downloadMarianModel()">下载更多</button>
                             </td>
                         </tr>
@@ -1264,7 +1264,9 @@ async function downloadMarianModel() {
                     : '<span class="badge" style="background: #e0e7ff; color: #4338ca;">未下载</span>';
 
                 const buttonHTML = model.downloaded
-                    ? '<button class="btn btn-sm" disabled style="padding: 0.5rem 1rem; background: #94a3b8; color: white; border: none; border-radius: 0.375rem; cursor: not-allowed;">已下载</button>'
+                    ? model.ctranslate2_converted
+                        ? '<button class="btn btn-sm" disabled style="padding: 0.5rem 1rem; background: #0f766e; color: white; border: none; border-radius: 0.375rem; cursor: not-allowed;">CT2 已就绪</button>'
+                        : `<button class="btn btn-sm" onclick="convertMarianModelToCT2(event, '${model.model_name}')" style="padding: 0.5rem 1rem; background: #0f766e; color: white; border: none; border-radius: 0.375rem; cursor: pointer;">转换 CT2</button>`
                     : `<button class="btn btn-sm btn-success" onclick="downloadMarianModelReal(event, '${model.model_name}')" style="padding: 0.5rem 1rem; background: #10b981; color: white; border: none; border-radius: 0.375rem; cursor: pointer;">立即下载</button>`;
 
                 return `
@@ -1278,6 +1280,9 @@ async function downloadMarianModel() {
                         </p>
                         <p style="color: #666; font-size: 0.875rem; margin-bottom: 0.5rem;">
                             <strong>大小:</strong> ${model.size} | <strong>质量:</strong> ${model.quality}
+                        </p>
+                        <p style="color: #666; font-size: 0.875rem; margin-bottom: 0.5rem;">
+                            <strong>CTranslate2:</strong> ${model.ctranslate2_converted ? '已转换，可用于加速' : (model.downloaded ? '可转换为 int8 本地推理' : '需先下载模型')}
                         </p>
                         <div style="margin-top: 1rem;">
                             ${buttonHTML}
@@ -1311,6 +1316,7 @@ async function downloadMarianModel() {
                             <li>首次下载会从 HuggingFace 下载，国内可能较慢</li>
                             <li>建议使用镜像加速：export HF_ENDPOINT=https://hf-mirror.com</li>
                             <li>下载的模型会缓存到 ~/.cache/huggingface/</li>
+                            <li>下载完成后可转换 CTranslate2 int8，本地 CPU 推理通常更快</li>
                         </ul>
                     </div>
                 </div>
@@ -1376,6 +1382,43 @@ async function downloadMarianModelReal(event, modelName) {
         button.disabled = false;
         button.textContent = '立即下载';
         button.style.background = '#10b981';
+    }
+}
+
+// 转换 MarianMT 为 CTranslate2
+async function convertMarianModelToCT2(event, modelName) {
+    const confirmed = confirm(`确定要转换为 CTranslate2 吗？\n\n${modelName}\n\n转换会占用 CPU 和磁盘空间，完成后 MarianMT auto 后端会优先使用 CT2 本地模型。`);
+
+    if (!confirmed) return;
+
+    const button = event.currentTarget;
+    button.disabled = true;
+    button.textContent = '转换中...';
+    button.style.background = '#94a3b8';
+
+    try {
+        const response = await fetch(`/admin/models/marian/convert-ct2?model_name=${encodeURIComponent(modelName)}`, {
+            method: 'POST',
+            headers
+        });
+        const result = await response.json();
+
+        if (!response.ok || !result.success || !result.task_id) {
+            throw new Error(result.detail || result.message || '转换失败');
+        }
+
+        await pollDownloadTask(result.task_id, {
+            title: `转换 CT2 ${modelName}`,
+            anchor: button,
+            onComplete: async () => {
+                await downloadMarianModel();
+            }
+        });
+    } catch (error) {
+        alert(`CT2 转换失败: ${error.message}`);
+        button.disabled = false;
+        button.textContent = '转换 CT2';
+        button.style.background = '#0f766e';
     }
 }
 
@@ -1636,9 +1679,21 @@ async function loadLogs() {
                 <td>${new Date(log.created_at).toLocaleString()}</td>
                 <td>${log.api_key_name || '-'}</td>
                 <td>${log.source_lang} → ${log.target_lang}</td>
-                <td>${log.model_used}</td>
+                <td>
+                    ${log.model_used}
+                    ${log.model_backend ? `<br><small style="color: #666;">${log.model_backend}</small>` : ''}
+                    ${log.actual_model_name ? `<br><small style="color: #666;">${log.actual_model_name}</small>` : ''}
+                </td>
                 <td>${log.char_count}</td>
                 <td>${log.response_time_ms}ms</td>
+                <td>
+                    <small>
+                        加载 ${log.model_load_ms || 0}ms<br>
+                        推理 ${log.inference_ms || 0}ms<br>
+                        格式 ${log.format_ms || 0}ms<br>
+                        ${log.segment_count || 0} 段 / ${log.batch_count || 0} 批
+                    </small>
+                </td>
                 <td>
                     <span class="badge ${log.success ? 'badge-success' : 'badge-danger'}">
                         ${log.success ? '成功' : '失败'}
@@ -1665,12 +1720,13 @@ async function loadLogs() {
                                 <th>模型</th>
                                 <th>字符数</th>
                                 <th>响应时间</th>
+                                <th>耗时拆分</th>
                                 <th>状态</th>
                                 <th>错误</th>
                             </tr>
                         </thead>
                         <tbody>
-                            ${rows || '<tr><td colspan="8" style="text-align: center; padding: 2rem; color: #666;">暂无调用记录</td></tr>'}
+                            ${rows || '<tr><td colspan="9" style="text-align: center; padding: 2rem; color: #666;">暂无调用记录</td></tr>'}
                         </tbody>
                     </table>
                 </div>
@@ -1911,7 +1967,7 @@ function loadDocs() {
                 <li>管理员创建 API Key：<code>POST /admin/api-keys</code>。</li>
                 <li>客户端携带 <code>X-API-Key</code> 调用 <code>POST /translate</code>。</li>
                 <li>服务按请求中的 <code>model</code> 直接调用对应本地模型；不会自动切换备用模型。</li>
-                <li>成功和已认证失败都会写入调用日志，用于统计和限流。</li>
+                <li>成功和已认证失败都会写入调用日志，用于统计、限流和耗时分析。</li>
             </ol>
 
             <h4 style="margin-top: 2rem;">2. 公共翻译接口</h4>
@@ -1956,7 +2012,18 @@ curl -X POST "http://localhost:8000/translate" \\
   "model_used": "argos",
   "source_lang": "en",
   "target_lang": "zh",
-  "success": true
+  "success": true,
+  "model_backend": "argos",
+  "actual_model_name": "en-zh",
+  "timing": {
+    "backend": "argos",
+    "actual_model_name": "en-zh",
+    "model_load_ms": 0.12,
+    "inference_ms": 8.43,
+    "format_ms": 0.31,
+    "segment_count": 1,
+    "batch_count": 0
+  }
 }
             </pre>
 
@@ -1971,7 +2038,7 @@ curl -X POST "http://localhost:8000/translate" \\
                 </thead>
                 <tbody>
                     <tr><td><code>argos</code></td><td>轻量级离线翻译</td><td>需安装对应 Argos 语言包。</td></tr>
-                    <tr><td><code>marian</code></td><td>Helsinki-NLP Opus-MT</td><td>需下载对应语言对模型。</td></tr>
+                    <tr><td><code>marian</code></td><td>Helsinki-NLP Opus-MT</td><td>需下载对应语言对模型；可转换 CTranslate2 int8 后由 <code>MARIAN_BACKEND=auto</code> 优先调用。</td></tr>
                     <tr><td><code>m2m100</code></td><td>facebook/m2m100_418M</td><td>需下载标准 M2M100 模型。</td></tr>
                     <tr><td><code>m2m100_1_2b</code></td><td>facebook/m2m100_1.2B</td><td>需下载 1.2B 模型，本地推理更慢。</td></tr>
                     <tr><td><code>nllb</code></td><td>facebook/nllb-200-distilled-600M</td><td>需下载 NLLB 模型；可通过 <code>NLLB_MODEL</code> 配置更大版本。</td></tr>
@@ -2009,6 +2076,7 @@ curl -X POST "http://localhost:8000/translate" \\
                     <tr><td><code>DELETE /admin/api-keys/{id}</code></td><td>Bearer JWT</td><td>吊销 API Key，历史日志会保留归属。</td></tr>
                     <tr><td><code>GET /admin/models/status</code></td><td>Bearer JWT</td><td>查看模型、语言包、本地缓存完整性。</td></tr>
                     <tr><td><code>GET /admin/models/downloads/{task_id}</code></td><td>Bearer JWT</td><td>查询模型/语言包下载进度。</td></tr>
+                    <tr><td><code>POST /admin/models/marian/convert-ct2</code></td><td>Bearer JWT</td><td>将已下载 MarianMT 转换为 CTranslate2 本地模型。</td></tr>
                 </tbody>
             </table>
 

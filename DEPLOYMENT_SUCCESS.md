@@ -69,12 +69,14 @@ curl -X POST "http://localhost:8000/translate" \
 
 ### ✅ 已实现功能
 
-- [x] **三模型支持**: Argos、MarianMT、M2M100
+- [x] **多模型支持**: Argos、MarianMT、M2M100、M2M100 1.2B、NLLB-200
 - [x] **安全认证**: JWT Token + API Key 双重认证
 - [x] **管理后台**: 完整的 Web 管理界面
 - [x] **API 密钥管理**: 创建、删除、配置速率限制
 - [x] **在线测试**: Web 界面测试翻译
 - [x] **调用日志**: 记录所有翻译请求
+- [x] **耗时拆分**: 记录模型加载、推理、格式处理耗时
+- [x] **MarianMT CTranslate2**: 支持将已下载 MarianMT 转换为 CT2 int8 本地推理
 - [x] **统计分析**: 实时查看调用统计
 - [x] **明确模型选择**: 指定模型失败时直接返回错误，不自动切换备用模型
 - [x] **速率限制**: 防止滥用
@@ -140,7 +142,7 @@ data = {
     "text": "Hello, world!",
     "source_lang": "en",
     "target_lang": "zh",
-    "model": "argos"  # 可选: argos, marian, m2m100
+    "model": "argos"  # 可选: argos, marian, m2m100, m2m100_1_2b, nllb
 }
 
 response = requests.post(url, json=data, headers=headers)
@@ -149,6 +151,7 @@ result = response.json()
 if result["success"]:
     print(f"译文: {result['translated_text']}")
     print(f"使用模型: {result['model_used']}")
+    print(f"耗时: {result.get('timing')}")
 ```
 
 ### JavaScript
@@ -287,13 +290,21 @@ pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
 
 ### Transformers 翻译速度参数
 
-MarianMT、M2M100、NLLB 会使用本地 `generate()` 推理，CPU 上会明显慢于 Argos。可在 `.env` 中调整：
+Argos 是轻量离线翻译包，通常会比 PyTorch Transformers 快。MarianMT、M2M100、NLLB 默认使用本地 `generate()` 推理，CPU 上会明显慢于 Argos。可在 `.env` 中调整：
 
 ```env
 TRANSLATION_MAX_NEW_TOKENS=128
 TRANSLATION_BATCH_SIZE=8
 TORCH_CPU_THREADS=0
+MODEL_WARMUP_ENABLED=true
+TRANSFORMER_WARMUP_MODELS=marian
+TRANSFORMER_WARMUP_PAIRS=zh-en,en-zh
+MARIAN_BACKEND=auto
+CTRANSLATE2_MODELS_DIR=./models/ctranslate2
+MARIAN_CT2_COMPUTE_TYPE=int8
 ```
+
+MarianMT 下载完成后，可在管理后台“模型管理”点击“转换 CT2”。转换产物保存在 `./models/ctranslate2`，该目录已被 `.gitignore` 忽略，不应上传到 Git。
 
 修改后重启：
 
@@ -361,7 +372,7 @@ A: 检查：
 - **认证**: JWT + API Key
 - **数据库**: SQLite (可迁移到 PostgreSQL)
 - **密码加密**: Argon2
-- **翻译引擎**: Argos Translate, MarianMT, M2M100
+- **翻译引擎**: Argos Translate, MarianMT, M2M100, NLLB, MarianMT CTranslate2
 - **前端**: 原生 HTML + CSS + JavaScript
 
 ---

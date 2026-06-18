@@ -83,6 +83,20 @@ class Config:
     TRANSLATION_MAX_NEW_TOKENS = int(os.getenv("TRANSLATION_MAX_NEW_TOKENS", "128"))
     TRANSLATION_BATCH_SIZE = int(os.getenv("TRANSLATION_BATCH_SIZE", "8"))
     TORCH_CPU_THREADS = int(os.getenv("TORCH_CPU_THREADS", "0"))
+    MODEL_WARMUP_ENABLED = os.getenv("MODEL_WARMUP_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
+    TRANSFORMER_WARMUP_MODELS = [
+        model.strip()
+        for model in os.getenv("TRANSFORMER_WARMUP_MODELS", "marian").split(",")
+        if model.strip()
+    ]
+    TRANSFORMER_WARMUP_PAIRS = [
+        pair.strip()
+        for pair in os.getenv("TRANSFORMER_WARMUP_PAIRS", "zh-en,en-zh").split(",")
+        if pair.strip()
+    ]
+    MARIAN_BACKEND = os.getenv("MARIAN_BACKEND", "auto").lower()
+    CTRANSLATE2_MODELS_DIR = os.getenv("CTRANSLATE2_MODELS_DIR", "./models/ctranslate2")
+    MARIAN_CT2_COMPUTE_TYPE = os.getenv("MARIAN_CT2_COMPUTE_TYPE", "int8")
 
     # 启动时预热的 Argos 语言对，避免首个客户请求承担初始化成本
     ARGOS_WARMUP_PAIRS = [

@@ -49,6 +49,13 @@ class TranslationLog(Base):
     success = Column(Boolean, nullable=False)
     error_message = Column(String, nullable=True)
     response_time = Column(Float, nullable=False)  # 响应时间（秒）
+    model_backend = Column(String, nullable=True)
+    actual_model_name = Column(String, nullable=True)
+    model_load_time = Column(Float, nullable=True, default=0.0)
+    inference_time = Column(Float, nullable=True, default=0.0)
+    format_time = Column(Float, nullable=True, default=0.0)
+    segment_count = Column(Integer, nullable=True, default=0)
+    batch_count = Column(Integer, nullable=True, default=0)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 class SystemConfig(Base):

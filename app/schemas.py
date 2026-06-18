@@ -18,6 +18,9 @@ class TranslationResponse(BaseModel):
     source_lang: str
     target_lang: str
     success: bool = True
+    model_backend: Optional[str] = None
+    actual_model_name: Optional[str] = None
+    timing: Optional[dict] = None
 
 class ErrorResponse(BaseModel):
     success: bool = False

@@ -16,8 +16,11 @@ Mc-Translation/
 │   ├── models/                   # 翻译模型封装
 │   │   ├── __init__.py
 │   │   ├── argos.py             # Argos Translate
-│   │   ├── marian.py            # MarianMT
-│   │   └── m2m100.py            # M2M100
+│   │   ├── marian.py            # MarianMT / CTranslate2
+│   │   ├── m2m100.py            # M2M100
+│   │   ├── nllb.py              # NLLB-200
+│   │   ├── metrics.py           # 翻译耗时统计结构
+│   │   └── ct2_utils.py         # CTranslate2 本地模型路径工具
 │   │
 │   ├── static/                   # 静态资源
 │   │   ├── css/
@@ -58,8 +61,9 @@ Mc-Translation/
 
 ### 3. 翻译引擎 (`models/`)
 - **Argos**: 轻量级、快速
-- **MarianMT**: 高质量、专业
+- **MarianMT**: 高质量、专业；已下载模型可转换 CTranslate2 int8 加速
 - **M2M100**: 多语言支持
+- **NLLB-200**: Meta 多语言翻译模型
 
 ### 4. 管理后台 (`templates/`, `static/`)
 - 仪表盘：实时统计
@@ -127,6 +131,7 @@ Mc-Translation/
 4. 执行翻译
    - 选择指定模型
    - 指定模型失败时直接返回错误，不自动切换备用模型
+   - 记录模型加载、推理、格式处理耗时
 
 5. 记录日志
    - 保存调用记录
@@ -137,6 +142,7 @@ Mc-Translation/
    {
      translated_text: "...",
      model_used: "argos",
+     timing: {...},
      success: true
    }
 ```
@@ -175,10 +181,16 @@ Mc-Translation/
 - source_lang: 源语言
 - target_lang: 目标语言
 - model_used: 使用的模型
+- model_backend: 实际后端（argos / transformers / ctranslate2）
+- actual_model_name: 实际本地模型名
 - char_count: 字符数
 - success: 是否成功
 - error_message: 错误信息
 - response_time: 响应时间（秒）
+- model_load_time: 模型加载耗时
+- inference_time: 推理耗时
+- format_time: 格式保护处理耗时
+- segment_count / batch_count: 翻译段数和批次数
 - created_at: 创建时间
 ```
 
@@ -212,6 +224,8 @@ gunicorn app.main:app \
 - 使用较小的模型（m2m100_418M vs m2m100_1.2B）
 - 启用 GPU 加速（CUDA）
 - 预加载常用语言对
+- MarianMT 下载后转换 CTranslate2 int8，并使用 `MARIAN_BACKEND=auto`
+- 通过调用日志 timing 判断慢在加载、推理还是格式处理
 
 ### 3. 缓存策略
 ```python

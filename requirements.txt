@@ -6,6 +6,7 @@ torch==2.4.1
 sentencepiece==0.2.0
 sacremoses==0.0.53
 argostranslate==1.9.6
+ctranslate2==4.8.0
 
 pydantic==2.9.2
 python-multipart==0.0.12
