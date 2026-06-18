@@ -198,22 +198,31 @@ async function loadAPIKeys() {
 
         const keys = await response.json();
 
-        let keysHTML = keys.map(key => `
-            <tr>
-                <td>${key.name}</td>
-                <td><code>${key.key}</code></td>
-                <td><span class="badge ${key.is_active ? 'badge-success' : 'badge-danger'}">
-                    ${key.is_active ? '✓ 活跃' : '✗ 禁用'}
-                </span></td>
-                <td>${key.rate_limit}/周期</td>
-                <td>${key.created_at}</td>
-                <td>
-                    ${key.is_active
-                        ? `<button class="btn btn-danger btn-sm" onclick="deleteKey(${key.id})">吊销</button>`
-                        : '<button class="btn btn-sm" disabled style="background: #94a3b8; color: white; cursor: not-allowed;">已吊销</button>'}
-                </td>
-            </tr>
-        `).join('');
+        let keysHTML = keys.map(key => {
+            const keyValue = escapeHTML(key.key);
+            const copyValue = escapeJSString(key.key);
+            const statusText = key.is_active ? '✓ 活跃' : '✗ 禁用';
+            const statusClass = key.is_active ? 'badge-success' : 'badge-danger';
+            const actionHTML = key.is_active
+                ? `<button class="btn btn-danger btn-sm" onclick="deleteKey(${key.id})">吊销</button>`
+                : '<button class="btn btn-sm" disabled style="background: #94a3b8; color: white; cursor: not-allowed;">已吊销</button>';
+
+            return `
+                <tr>
+                    <td>${escapeHTML(key.name)}</td>
+                    <td>
+                        <div class="api-key-copy-row">
+                            <code>${keyValue}</code>
+                            <button type="button" class="btn btn-sm api-key-copy-btn" onclick="copyToClipboard('${copyValue}', this)">复制</button>
+                        </div>
+                    </td>
+                    <td><span class="badge ${statusClass}">${statusText}</span></td>
+                    <td>${escapeHTML(key.rate_limit)}/周期</td>
+                    <td>${escapeHTML(key.created_at)}</td>
+                    <td>${actionHTML}</td>
+                </tr>
+            `;
+        }).join('');
 
         document.getElementById('content-area').innerHTML = `
             <div class="card">
@@ -341,6 +350,11 @@ async function submitCreateAPIKey(event) {
         }
 
         const result = await response.json();
+        const resultKey = result.key || '';
+        const safeResultKey = escapeHTML(resultKey);
+        const copyResultKey = escapeJSString(resultKey);
+        const safeName = escapeHTML(name);
+        const safeDescription = escapeHTML(description);
 
         // 显示成功页面，包含新密钥
         document.getElementById('content-area').innerHTML = `
@@ -350,26 +364,26 @@ async function submitCreateAPIKey(event) {
                 </div>
 
                 <div style="padding: 2rem;">
-                    <div style="background: #fef3c7; border-left: 4px solid #f59e0b; padding: 1rem; margin-bottom: 1.5rem;">
-                        <strong style="color: #92400e;">⚠️ 重要提示</strong>
-                        <p style="color: #92400e; margin-top: 0.5rem; margin-bottom: 0;">此密钥只显示一次，请立即复制保存！</p>
+                    <div style="background: #ecfdf5; border-left: 4px solid #10b981; padding: 1rem; margin-bottom: 1.5rem;">
+                        <strong style="color: #047857;">创建完成</strong>
+                        <p style="color: #047857; margin-top: 0.5rem; margin-bottom: 0;">可以在这里复制密钥，返回列表后也可以继续复制。</p>
                     </div>
 
                     <div style="margin-bottom: 1.5rem;">
                         <label style="display: block; margin-bottom: 0.5rem; font-weight: 500;">API 密钥</label>
                         <div style="display: flex; gap: 0.5rem;">
-                            <input type="text" id="new-api-key" value="${result.key}" readonly
+                            <input type="text" id="new-api-key" value="${safeResultKey}" readonly
                                    style="flex: 1; padding: 0.75rem; border: 2px solid #10b981; border-radius: 0.5rem; font-family: monospace; font-size: 1rem; background: #f0fdf4;">
-                            <button onclick="copyToClipboard('${result.key}')" class="btn btn-primary"
+                            <button type="button" onclick="copyToClipboard('${copyResultKey}', this)" class="btn btn-primary"
                                     style="padding: 0.75rem 1.5rem; background: #10b981; color: white; border: none; border-radius: 0.5rem; cursor: pointer; white-space: nowrap;">
-                                📋 复制
+                                复制
                             </button>
                         </div>
                     </div>
 
                     <div style="background: #f9fafb; padding: 1rem; border-radius: 0.5rem; margin-bottom: 1.5rem;">
-                        <p style="margin: 0; color: #666;"><strong>名称:</strong> ${name}</p>
-                        ${description ? `<p style="margin: 0.5rem 0 0 0; color: #666;"><strong>描述:</strong> ${description}</p>` : ''}
+                        <p style="margin: 0; color: #666;"><strong>名称:</strong> ${safeName}</p>
+                        ${description ? `<p style="margin: 0.5rem 0 0 0; color: #666;"><strong>描述:</strong> ${safeDescription}</p>` : ''}
                         <p style="margin: 0.5rem 0 0 0; color: #666;"><strong>速率限制:</strong> ${rateLimit} 请求/周期</p>
                     </div>
 
@@ -390,12 +404,55 @@ async function submitCreateAPIKey(event) {
 }
 
 // 复制到剪贴板
-function copyToClipboard(text) {
-    navigator.clipboard.writeText(text).then(() => {
-        alert('✓ 密钥已复制到剪贴板');
-    }).catch(() => {
-        alert('复制失败，请手动复制');
-    });
+function copyToClipboard(text, button = null) {
+    const showSuccess = () => {
+        if (!button) {
+            alert('✓ 已复制到剪贴板');
+            return;
+        }
+
+        const originalText = button.textContent;
+        button.textContent = '已复制';
+        button.disabled = true;
+
+        setTimeout(() => {
+            button.textContent = originalText;
+            button.disabled = false;
+        }, 1600);
+    };
+
+    const showError = () => {
+        alert('复制失败，请手动选择并复制');
+    };
+
+    if (navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(text).then(showSuccess).catch(() => {
+            fallbackCopyText(text) ? showSuccess() : showError();
+        });
+        return;
+    }
+
+    fallbackCopyText(text) ? showSuccess() : showError();
+}
+
+function fallbackCopyText(text) {
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.setAttribute('readonly', '');
+    textarea.style.position = 'fixed';
+    textarea.style.left = '-9999px';
+    textarea.style.top = '0';
+    document.body.appendChild(textarea);
+    textarea.select();
+
+    try {
+        return document.execCommand('copy');
+    } catch (error) {
+        console.warn('fallback copy failed:', error);
+        return false;
+    } finally {
+        document.body.removeChild(textarea);
+    }
 }
 
 // 吊销 API Key
@@ -586,6 +643,14 @@ function escapeHTML(value) {
         .replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&#039;');
+}
+
+function escapeJSString(value) {
+    return String(value ?? '')
+        .replace(/\\/g, '\\\\')
+        .replace(/'/g, "\\'")
+        .replace(/\r/g, '\\r')
+        .replace(/\n/g, '\\n');
 }
 
 function updateTranslatorMeta() {
@@ -2178,7 +2243,13 @@ async function changePassword() {
 function loadDocs() {
     document.getElementById('content-area').innerHTML = `
         <div class="card">
-            <h3 class="card-title">API 接口文档</h3>
+            <div class="card-header" style="padding: 0; margin-bottom: 1rem;">
+                <h3 class="card-title">API 接口文档</h3>
+                <button type="button" class="btn btn-primary" onclick="downloadAPIDocs()"
+                        style="padding: 0.55rem 1rem; background: var(--primary-color); color: white; border: none; border-radius: 0.5rem; cursor: pointer;">
+                    下载 Markdown
+                </button>
+            </div>
             <p style="color: #475569; margin-top: 0.75rem;">
                 客户端只需要调用公开翻译接口；管理员先在后台创建 API Key，再交给客户端使用。完整 Swagger 文档可访问 <code>/docs</code>，OpenAPI JSON 为 <code>/openapi.json</code>。
             </p>
@@ -2324,6 +2395,165 @@ curl -X POST "http://localhost:8000/translate" \\
             </ul>
         </div>
     `;
+}
+
+function getAPIDocsMarkdown() {
+    return `# API 接口文档
+
+客户端只需要调用公开翻译接口；管理员先在后台创建 API Key，再交给客户端使用。
+
+完整 Swagger 文档：\`/docs\`
+
+OpenAPI JSON：\`/openapi.json\`
+
+## 1. 调用流程
+
+1. 管理员登录 \`POST /admin/login\`，获得 JWT Token。
+2. 管理员创建 API Key：\`POST /admin/api-keys\`。
+3. 客户端携带 \`X-API-Key\` 调用 \`POST /translate\`。
+4. 服务按请求中的 \`model\` 直接调用对应本地模型；不会自动切换备用模型。
+5. 成功和已认证失败都会写入调用日志，用于统计、限流和耗时分析。
+
+## 2. 公共翻译接口
+
+**端点：** \`POST /translate\`
+
+**认证：** API Key，请求头 \`X-API-Key: sk_xxx\`
+
+**Content-Type：** \`application/json\`
+
+### 请求示例
+
+\`\`\`bash
+curl -X POST "http://localhost:8000/translate" \\
+  -H "Content-Type: application/json" \\
+  -H "X-API-Key: sk_your_api_key" \\
+  -d '{
+    "text": "Hello, world!",
+    "source_lang": "en",
+    "target_lang": "zh",
+    "model": "argos"
+  }'
+\`\`\`
+
+### 请求字段
+
+| 字段 | 必填 | 说明 |
+| --- | --- | --- |
+| \`text\` | 是 | 待翻译文本，不能为空；会尽量保留换行、空格、Markdown、HTML、JSON/YAML 等结构。 |
+| \`source_lang\` | 是 | 源语言代码，例如 \`en\`、\`zh\`。 |
+| \`target_lang\` | 是 | 目标语言代码，不能和源语言相同。 |
+| \`model\` | 否 | 指定模型 ID；不传时使用系统默认模型。 |
+
+### 响应示例
+
+\`\`\`json
+{
+  "translated_text": "你好，世界！",
+  "model_used": "argos",
+  "source_lang": "en",
+  "target_lang": "zh",
+  "success": true,
+  "model_backend": "argos",
+  "actual_model_name": "en-zh",
+  "timing": {
+    "backend": "argos",
+    "actual_model_name": "en-zh",
+    "model_load_ms": 0.12,
+    "inference_ms": 8.43,
+    "format_ms": 0.31,
+    "segment_count": 1,
+    "batch_count": 0
+  }
+}
+\`\`\`
+
+## 3. 模型 ID
+
+| model | 说明 | 使用条件 |
+| --- | --- | --- |
+| \`argos\` | 轻量级离线翻译 | 需安装对应 Argos 语言包。 |
+| \`marian\` | Helsinki-NLP Opus-MT | 需下载对应语言对模型；可转换 CTranslate2 int8 后由 \`MARIAN_BACKEND=auto\` 优先调用。 |
+| \`m2m100\` | facebook/m2m100_418M | 需下载标准 M2M100 模型；可转换 CTranslate2 int8 后由 \`M2M100_BACKEND=auto\` 优先调用。 |
+| \`m2m100_1_2b\` | facebook/m2m100_1.2B | 需下载 1.2B 模型；可转换 CTranslate2，但转换和本地推理资源占用更高。 |
+| \`nllb\` | facebook/nllb-200-distilled-600M | 需下载 NLLB 模型；可转换 CTranslate2 int8 后由 \`NLLB_BACKEND=auto\` 优先调用。 |
+
+## 4. 支持的语言代码
+
+实际可用语言对取决于对应模型或语言包是否已经下载，可在“模型管理”页面查看状态。
+
+| 代码 | 语言 |
+| --- | --- |
+| \`en\` | 英语 |
+| \`zh\` | 简体中文 |
+| \`zt\` | 繁体中文，主要用于 Argos/NLLB 已安装或已支持场景 |
+| \`ja\` | 日语 |
+| \`ko\` | 韩语 |
+| \`fr\` | 法语 |
+| \`de\` | 德语 |
+| \`es\` | 西班牙语 |
+| \`ru\` | 俄语 |
+| \`ar\`、\`hi\`、\`th\` 等 | NLLB 支持，M2M100 当前页面只开放常用语言。 |
+
+## 5. 管理端接口
+
+| 接口 | 认证 | 用途 |
+| --- | --- | --- |
+| \`POST /admin/login\` | 无 | 管理员登录，返回 JWT。 |
+| \`GET /admin/api-keys\` | Bearer JWT | 查看 API Key 列表。 |
+| \`POST /admin/api-keys\` | Bearer JWT | 创建 API Key。 |
+| \`DELETE /admin/api-keys/{id}\` | Bearer JWT | 吊销 API Key，历史日志会保留归属。 |
+| \`GET /admin/models/status\` | Bearer JWT | 查看模型、语言包、本地缓存完整性。 |
+| \`GET /admin/models/downloads/{task_id}\` | Bearer JWT | 查询模型/语言包下载进度。 |
+| \`POST /admin/models/marian/convert-ct2\` | Bearer JWT | 将已下载 MarianMT 转换为 CTranslate2 本地模型。 |
+| \`POST /admin/models/m2m100/convert-ct2\` | Bearer JWT | 将已下载 M2M100 标准模型转换为 CTranslate2 本地模型。 |
+| \`POST /admin/models/m2m100-large/convert-ct2\` | Bearer JWT | 将已下载 M2M100 1.2B 模型转换为 CTranslate2 本地模型。 |
+| \`POST /admin/models/nllb/convert-ct2\` | Bearer JWT | 将已下载 NLLB 模型转换为 CTranslate2 本地模型。 |
+
+## 6. 速率限制
+
+每个 API Key 有独立限流，默认 \`100\` 请求 / \`3600\` 秒周期；请求数和周期都可在系统设置中调整。已认证的成功与失败翻译请求都会计入窗口。
+
+## 7. 错误返回
+
+错误响应使用 FastAPI 标准结构，主体通常为：
+
+\`\`\`json
+{
+  "detail": "错误说明"
+}
+\`\`\`
+
+| 状态码 | 说明 |
+| --- | --- |
+| \`400\` | 不支持的模型、语言对不可用、源语言和目标语言相同。 |
+| \`401\` | 缺少 API Key、API Key 无效或已过期。 |
+| \`422\` | JSON 字段缺失、类型错误或 \`text\` 为空。 |
+| \`429\` | 超过 API Key 速率限制。 |
+| \`500\` | 模型未初始化或服务器内部错误。 |
+`;
+}
+
+function downloadAPIDocs(format = 'md') {
+    const normalizedFormat = String(format || 'md').toLowerCase();
+
+    if (normalizedFormat !== 'md') {
+        alert('当前仅支持 Markdown 格式下载');
+        return;
+    }
+
+    const content = getAPIDocsMarkdown();
+    const blob = new Blob([content], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    const date = new Date().toISOString().slice(0, 10);
+
+    link.href = url;
+    link.download = `translation-api-docs-${date}.md`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
 }
 
 // DOMContentLoaded 中已经处理了初始加载，这里移除重复调用

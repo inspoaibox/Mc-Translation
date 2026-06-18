@@ -486,6 +486,42 @@ td {
     border-bottom: 1px solid var(--border-color);
 }
 
+.api-key-copy-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    min-width: 320px;
+}
+
+.api-key-copy-row code {
+    display: block;
+    flex: 1;
+    min-width: 0;
+    padding: 0.35rem 0.5rem;
+    border-radius: 0.375rem;
+    background: #f1f5f9;
+    color: var(--text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.api-key-copy-btn {
+    flex: 0 0 auto;
+    background: #e0f2fe;
+    color: #0369a1;
+    border: 1px solid #bae6fd;
+}
+
+.api-key-copy-btn:hover:not(:disabled) {
+    background: #bae6fd;
+}
+
+.api-key-copy-btn:disabled {
+    opacity: 0.75;
+    cursor: not-allowed;
+}
+
 .badge {
     display: inline-block;
     padding: 0.25rem 0.75rem;
