@@ -464,7 +464,27 @@ pip install torch torchvision torchaudio --index-url https://download.pytorch.or
 - MarianMT: ~/.cache/huggingface
 - M2M100: ~/.cache/huggingface
 
-### 3. 并发配置
+### 3. Transformers 翻译速度参数
+
+MarianMT、M2M100、NLLB 使用 `model.generate()` 本地推理，CPU 上会明显慢于 Argos。可在 `.env` 中调整：
+
+```env
+TRANSLATION_MAX_NEW_TOKENS=128
+TRANSLATION_BATCH_SIZE=8
+TORCH_CPU_THREADS=0
+```
+
+- `TRANSLATION_MAX_NEW_TOKENS`: 单段最大生成长度，越大越慢；短句会自动按输入长度降低上限。
+- `TRANSLATION_BATCH_SIZE`: 多行普通文本会批量送入模型，提高吞吐。
+- `TORCH_CPU_THREADS`: `0` 表示使用 PyTorch 默认线程；小机器可尝试 `2` 或 `4`，避免线程调度过重。
+
+修改后重启服务：
+
+```bash
+pm2 restart mc-translation --update-env
+```
+
+### 4. 并发配置
 
 使用 Gunicorn + Uvicorn workers：
 

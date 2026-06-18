@@ -5,7 +5,8 @@ from transformers import M2M100ForConditionalGeneration, M2M100Tokenizer
 from typing import Optional
 from threading import Lock
 import torch
-from .formatting import translate_preserving_line_format
+from .formatting import translate_preserving_line_format_batched
+from .generation import batched, generation_token_limit, model_load_kwargs
 
 class M2M100Translator:
     """M2M100 翻译器"""
@@ -46,7 +47,8 @@ class M2M100Translator:
                 )
                 self.model = M2M100ForConditionalGeneration.from_pretrained(
                     self.model_name,
-                    local_files_only=True
+                    local_files_only=True,
+                    **model_load_kwargs(self.device)
                 ).to(self.device)
                 self.model.eval()
             except Exception as e:
@@ -86,6 +88,32 @@ class M2M100Translator:
             # 生成翻译（指定目标语言）
             forced_bos_token_id = self.tokenizer.get_lang_id(tgt_lang)
 
+            def translate_segments(segments: list[str]) -> Optional[list[str]]:
+                translated_texts = []
+
+                for chunk in batched(segments):
+                    inputs = self.tokenizer(
+                        chunk,
+                        return_tensors="pt",
+                        padding=True,
+                        truncation=True,
+                        max_length=512
+                    ).to(self.device)
+
+                    with torch.inference_mode():
+                        translated = self.model.generate(
+                            **inputs,
+                            forced_bos_token_id=forced_bos_token_id,
+                            num_beams=1,
+                            do_sample=False,
+                            use_cache=True,
+                            max_new_tokens=generation_token_limit(inputs["input_ids"].shape[1])
+                        )
+
+                    translated_texts.extend(self.tokenizer.batch_decode(translated, skip_special_tokens=True))
+
+                return translated_texts
+
             def translate_segment(segment: str) -> Optional[str]:
                 inputs = self.tokenizer(
                     segment,
@@ -99,12 +127,14 @@ class M2M100Translator:
                         **inputs,
                         forced_bos_token_id=forced_bos_token_id,
                         num_beams=1,
-                        max_new_tokens=256
+                        do_sample=False,
+                        use_cache=True,
+                        max_new_tokens=generation_token_limit(inputs["input_ids"].shape[1])
                     )
 
                 return self.tokenizer.decode(translated[0], skip_special_tokens=True)
 
-            return translate_preserving_line_format(text, translate_segment)
+            return translate_preserving_line_format_batched(text, translate_segments, translate_segment)
 
         except Exception as e:
             print(f"M2M100 翻译失败: {str(e)}")

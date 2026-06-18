@@ -285,6 +285,23 @@ DEVICE=cuda
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
 ```
 
+### Transformers 翻译速度参数
+
+MarianMT、M2M100、NLLB 会使用本地 `generate()` 推理，CPU 上会明显慢于 Argos。可在 `.env` 中调整：
+
+```env
+TRANSLATION_MAX_NEW_TOKENS=128
+TRANSLATION_BATCH_SIZE=8
+TORCH_CPU_THREADS=0
+```
+
+修改后重启：
+
+```bash
+pm2 restart mc-translation --update-env
+pm2 save
+```
+
 ### 多 Worker 运行
 
 ```bash

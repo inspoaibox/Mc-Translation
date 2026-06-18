@@ -7,7 +7,8 @@ from typing import Optional
 import torch
 from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 
-from .formatting import translate_preserving_line_format
+from .formatting import translate_preserving_line_format_batched
+from .generation import batched, generation_token_limit, model_load_kwargs
 
 
 class NLLBTranslator:
@@ -51,7 +52,8 @@ class NLLBTranslator:
                 )
                 self.model = AutoModelForSeq2SeqLM.from_pretrained(
                     self.model_name,
-                    local_files_only=True
+                    local_files_only=True,
+                    **model_load_kwargs(self.device)
                 ).to(self.device)
                 self.model.eval()
             except Exception as e:
@@ -77,6 +79,32 @@ class NLLBTranslator:
                 print(f"NLLB 不支持目标语言: {target_lang} ({tgt_lang})")
                 return None
 
+            def translate_segments(segments: list[str]) -> Optional[list[str]]:
+                translated_texts = []
+
+                for chunk in batched(segments):
+                    inputs = self.tokenizer(
+                        chunk,
+                        return_tensors="pt",
+                        padding=True,
+                        truncation=True,
+                        max_length=512
+                    ).to(self.device)
+
+                    with torch.inference_mode():
+                        translated = self.model.generate(
+                            **inputs,
+                            forced_bos_token_id=forced_bos_token_id,
+                            num_beams=1,
+                            do_sample=False,
+                            use_cache=True,
+                            max_new_tokens=generation_token_limit(inputs["input_ids"].shape[1])
+                        )
+
+                    translated_texts.extend(self.tokenizer.batch_decode(translated, skip_special_tokens=True))
+
+                return translated_texts
+
             def translate_segment(segment: str) -> Optional[str]:
                 inputs = self.tokenizer(
                     segment,
@@ -90,12 +118,14 @@ class NLLBTranslator:
                         **inputs,
                         forced_bos_token_id=forced_bos_token_id,
                         num_beams=1,
-                        max_new_tokens=256
+                        do_sample=False,
+                        use_cache=True,
+                        max_new_tokens=generation_token_limit(inputs["input_ids"].shape[1])
                     )
 
                 return self.tokenizer.decode(translated[0], skip_special_tokens=True)
 
-            return translate_preserving_line_format(text, translate_segment)
+            return translate_preserving_line_format_batched(text, translate_segments, translate_segment)
 
         except Exception as e:
             print(f"NLLB 翻译失败: {str(e)}")

@@ -3,7 +3,7 @@ Text formatting helpers for translation models.
 """
 import json
 import re
-from typing import Callable, Optional, Tuple
+from typing import Callable, List, Optional, Tuple
 
 
 LINE_PATTERN = re.compile(r"([^\r\n]*)(\r\n|\n|\r|$)")
@@ -272,3 +272,87 @@ def translate_preserving_line_format(
         return None
 
     return "".join(parts)
+
+
+def _is_simple_translatable_line(line: str) -> bool:
+    stripped = line.strip()
+    if not stripped:
+        return False
+
+    if stripped.startswith(("{", "[")):
+        return False
+
+    if (
+        FENCE_PATTERN.match(line)
+        or YAML_KEY_VALUE_PATTERN.match(line)
+        or MARKDOWN_LIST_PATTERN.match(line)
+        or HTML_TAG_PATTERN.search(line)
+        or INLINE_CODE_PATTERN.search(line)
+        or ("|" in line and (stripped.startswith("|") or stripped.endswith("|")))
+    ):
+        return False
+
+    return True
+
+
+def translate_preserving_line_format_batched(
+    text: str,
+    translate_segments: Callable[[List[str]], Optional[List[str]]],
+    translate_segment: Callable[[str], Optional[str]]
+) -> Optional[str]:
+    """Batch simple lines while preserving complex formatting with the precise path."""
+    parts = []
+    simple_items = []
+    translated_any = False
+    in_code_fence = False
+
+    for match in LINE_PATTERN.finditer(text):
+        line, newline = match.groups()
+
+        if line == "" and newline == "":
+            break
+
+        if FENCE_PATTERN.match(line):
+            in_code_fence = not in_code_fence
+            parts.append(line + newline)
+            continue
+
+        if in_code_fence or line.strip() == "":
+            parts.append(line + newline)
+            continue
+
+        if _is_simple_translatable_line(line):
+            edge_match = EDGE_SPACE_PATTERN.match(line)
+            leading, content, trailing = edge_match.groups()
+            index = len(simple_items)
+            simple_items.append(content)
+            parts.append(("simple", leading, index, trailing, newline))
+            translated_any = True
+            continue
+
+        translated, changed = _translate_line(line, translate_segment)
+        if translated is None:
+            return None
+
+        parts.append(f"{translated}{newline}")
+        translated_any = translated_any or changed
+
+    if simple_items:
+        translated_items = translate_segments(simple_items)
+        if translated_items is None or len(translated_items) != len(simple_items):
+            return None
+    else:
+        translated_items = []
+
+    if not translated_any and text.strip():
+        return None
+
+    rendered = []
+    for part in parts:
+        if isinstance(part, tuple) and part[0] == "simple":
+            _, leading, index, trailing, newline = part
+            rendered.append(f"{leading}{translated_items[index]}{trailing}{newline}")
+        else:
+            rendered.append(part)
+
+    return "".join(rendered)

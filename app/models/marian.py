@@ -6,7 +6,8 @@ from typing import Optional, Dict
 from threading import Lock
 import os
 import torch
-from .formatting import translate_preserving_line_format
+from .formatting import translate_preserving_line_format_batched
+from .generation import batched, generation_token_limit, model_load_kwargs
 
 class MarianTranslator:
     """MarianMT 翻译器"""
@@ -28,7 +29,11 @@ class MarianTranslator:
             try:
                 print(f"正在从本地缓存加载 MarianMT 模型: {model_name}")
                 tokenizer = MarianTokenizer.from_pretrained(model_name, local_files_only=True)
-                model = MarianMTModel.from_pretrained(model_name, local_files_only=True).to(self.device)
+                model = MarianMTModel.from_pretrained(
+                    model_name,
+                    local_files_only=True,
+                    **model_load_kwargs(self.device)
+                ).to(self.device)
                 model.eval()
                 self.models[model_name] = (tokenizer, model)
                 return tokenizer, model
@@ -100,6 +105,31 @@ class MarianTranslator:
             if not tokenizer or not model:
                 return None
 
+            def translate_segments(segments: list[str]) -> Optional[list[str]]:
+                translated_texts = []
+
+                for chunk in batched(segments):
+                    inputs = tokenizer(
+                        chunk,
+                        return_tensors="pt",
+                        padding=True,
+                        truncation=True,
+                        max_length=512
+                    ).to(self.device)
+
+                    with torch.inference_mode():
+                        translated = model.generate(
+                            **inputs,
+                            num_beams=1,
+                            do_sample=False,
+                            use_cache=True,
+                            max_new_tokens=generation_token_limit(inputs["input_ids"].shape[1])
+                        )
+
+                    translated_texts.extend(tokenizer.batch_decode(translated, skip_special_tokens=True))
+
+                return translated_texts
+
             def translate_segment(segment: str) -> Optional[str]:
                 inputs = tokenizer(
                     segment,
@@ -113,12 +143,14 @@ class MarianTranslator:
                     translated = model.generate(
                         **inputs,
                         num_beams=1,
-                        max_new_tokens=256
+                        do_sample=False,
+                        use_cache=True,
+                        max_new_tokens=generation_token_limit(inputs["input_ids"].shape[1])
                     )
 
                 return tokenizer.decode(translated[0], skip_special_tokens=True)
 
-            return translate_preserving_line_format(text, translate_segment)
+            return translate_preserving_line_format_batched(text, translate_segments, translate_segment)
 
         except Exception as e:
             print(f"MarianMT 翻译失败: {str(e)}")

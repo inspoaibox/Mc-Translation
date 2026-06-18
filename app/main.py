@@ -15,6 +15,7 @@ from sqlalchemy import select, func, and_
 from threading import Thread
 import time
 import uvicorn
+import torch
 
 from .config import config
 from .schemas import (
@@ -96,6 +97,10 @@ async def lifespan(app: FastAPI):
                 pass
 
     print("正在初始化翻译器...")
+    if config.DEVICE == "cpu" and config.TORCH_CPU_THREADS > 0:
+        torch.set_num_threads(config.TORCH_CPU_THREADS)
+        print(f"PyTorch CPU 线程数: {config.TORCH_CPU_THREADS}")
+
     translators["argos"] = ArgosTranslator()
     Thread(
         target=translators["argos"].warm_up,

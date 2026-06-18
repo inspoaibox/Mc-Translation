@@ -80,6 +80,9 @@ class Config:
 
     # 设备配置
     DEVICE = os.getenv("DEVICE", "cpu")
+    TRANSLATION_MAX_NEW_TOKENS = int(os.getenv("TRANSLATION_MAX_NEW_TOKENS", "128"))
+    TRANSLATION_BATCH_SIZE = int(os.getenv("TRANSLATION_BATCH_SIZE", "8"))
+    TORCH_CPU_THREADS = int(os.getenv("TORCH_CPU_THREADS", "0"))
 
     # 启动时预热的 Argos 语言对，避免首个客户请求承担初始化成本
     ARGOS_WARMUP_PAIRS = [
