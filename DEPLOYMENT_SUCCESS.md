@@ -111,8 +111,8 @@ curl -X POST "http://localhost:8000/translate" \
    将生成的密钥替换 `.env` 中的 `SECRET_KEY`
 
 3. **启用 HTTPS**
-   - 使用 Nginx 反向代理
-   - 配置 SSL 证书（推荐 Let's Encrypt）
+   - 推荐使用 Caddy 反向代理，自动申请和续期 HTTPS 证书
+   - 也可以使用 Nginx + Let's Encrypt
 
 4. **配置防火墙**
    ```bash
