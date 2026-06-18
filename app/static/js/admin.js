@@ -852,13 +852,22 @@ async function loadModels() {
             ? await configResponse.json()
             : { use_gpu: false, default_model: 'argos', available_models: ['argos', 'marian', 'm2m100'] };
         const defaultModel = modelConfig.default_model || 'argos';
+        const ct2StatusLine = (modelInfo) => {
+            if (!modelInfo?.has_downloads) {
+                return '';
+            }
+            const count = modelInfo.ctranslate2_models?.length || 0;
+            return count > 0
+                ? `<br><small class="model-format-ok">✓ CT2 已优化 (${count})</small>`
+                : '<br><small class="model-format-warn">原始 Transformers，未 CT2 优化</small>';
+        };
         const marianDownloadStatus = status.marian.has_downloads
-            ? `<span style="color: #10b981;">✓ ${status.marian.downloaded_models.length} 个模型</span><br><small style="color: #666;">${status.marian.downloaded_models.slice(0, 2).map(m => m.split('/').pop()).join(', ')}${status.marian.downloaded_models.length > 2 ? '...' : ''}</small><br><small style="color: #0f766e;">CT2: ${status.marian.ctranslate2_models?.length || 0} 个 · ${status.marian.backend || 'auto'}</small>`
+            ? `<span style="color: #10b981;">✓ ${status.marian.downloaded_models.length} 个模型</span><br><small style="color: #666;">${status.marian.downloaded_models.slice(0, 2).map(m => m.split('/').pop()).join(', ')}${status.marian.downloaded_models.length > 2 ? '...' : ''}</small>${ct2StatusLine(status.marian)}<br><small style="color: #64748b;">后端: ${status.marian.backend || 'auto'}</small>`
             : status.marian.cache_incomplete
                 ? '<span style="color: #f59e0b;">⚠ 缓存不完整</span><br><small style="color: #666;">缺少模型权重文件</small>'
                 : '<span style="color: #f59e0b;">⚠ 未下载</span>';
         const m2m100DownloadStatus = status.m2m100.has_downloads
-            ? `<span style="color: #10b981;">✓ 已下载</span><br><small style="color: #666;">${status.m2m100.downloaded_models[0]?.split('/').pop() || ''}</small>`
+            ? `<span style="color: #10b981;">✓ 已下载</span><br><small style="color: #666;">${status.m2m100.downloaded_models[0]?.split('/').pop() || ''}</small>${ct2StatusLine(status.m2m100)}<br><small style="color: #64748b;">后端: ${status.m2m100.backend || 'auto'}</small>`
             : status.m2m100.cache_incomplete
                 ? '<span style="color: #f59e0b;">⚠ 缓存不完整</span><br><small style="color: #666;">已有部分文件，但缺少权重</small>'
                 : '<span style="color: #f59e0b;">⚠ 未下载</span>';
@@ -867,7 +876,7 @@ async function loadModels() {
                 return '<span style="color: #f59e0b;">⚠ 状态未知</span>';
             }
             if (modelInfo.has_downloads) {
-                return `<span style="color: #10b981;">✓ 已下载</span><br><small style="color: #666;">${modelInfo.downloaded_models?.[0]?.split('/').pop() || ''}</small><br><small style="color: #0f766e;">CT2: ${modelInfo.ctranslate2_models?.length || 0} 个 · ${modelInfo.backend || 'auto'}</small>`;
+                return `<span style="color: #10b981;">✓ 已下载</span><br><small style="color: #666;">${modelInfo.downloaded_models?.[0]?.split('/').pop() || ''}</small>${ct2StatusLine(modelInfo)}<br><small style="color: #64748b;">后端: ${modelInfo.backend || 'auto'}</small>`;
             }
             if (modelInfo.cache_incomplete) {
                 return '<span style="color: #f59e0b;">⚠ 缓存不完整</span><br><small style="color: #666;">已有部分文件，但缺少权重</small>';
@@ -881,7 +890,10 @@ async function loadModels() {
             if ((modelInfo.ctranslate2_models?.length || 0) === 0) {
                 return `<button class="btn btn-sm" style="padding: 0.25rem 0.75rem; font-size: 0.875rem; background: #0f766e; color: white; border: none; border-radius: 0.375rem; cursor: pointer;" onclick="${convertHandler}(event)">转换 CT2</button>`;
             }
-            return `<button class="btn btn-sm" style="padding: 0.25rem 0.75rem; font-size: 0.875rem; background: #64748b; color: white; border: none; border-radius: 0.375rem; cursor: pointer;" onclick="showModelInfo('${infoKey}')">详情</button>`;
+            return `<div class="action-stack">
+                <button class="btn btn-sm" style="padding: 0.25rem 0.75rem; font-size: 0.875rem; background: #64748b; color: white; border: none; border-radius: 0.375rem; cursor: pointer;" onclick="showModelInfo('${infoKey}')">详情</button>
+                <button class="btn btn-sm" disabled style="padding: 0.25rem 0.75rem; font-size: 0.875rem; background: #dcfce7; color: #166534; border: none; border-radius: 0.375rem;">CT2 已优化</button>
+            </div>`;
         };
         const m2m100LargeDownloadStatus = modelDownloadStatus(status.m2m100_1_2b);
         const nllbDownloadStatus = modelDownloadStatus(status.nllb);
@@ -936,7 +948,7 @@ async function loadModels() {
                                 ${marianDownloadStatus}
                             </td>
                             <td data-download-card>
-                                <button class="btn btn-sm" style="padding: 0.25rem 0.75rem; font-size: 0.875rem; background: #10b981; color: white; border: none; border-radius: 0.375rem; cursor: pointer;" onclick="downloadMarianModel()">下载更多</button>
+                                <button class="btn btn-sm" style="padding: 0.25rem 0.75rem; font-size: 0.875rem; background: #0f766e; color: white; border: none; border-radius: 0.375rem; cursor: pointer;" onclick="downloadMarianModel()">下载/转换</button>
                             </td>
                         </tr>
                         <tr>

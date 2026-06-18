@@ -504,6 +504,22 @@ td {
     color: #991b1b;
 }
 
+.model-format-ok {
+    color: #047857;
+    font-weight: 700;
+}
+
+.model-format-warn {
+    color: #b45309;
+    font-weight: 700;
+}
+
+.action-stack {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+}
+
 /* 在线翻译 */
 .translator-shell {
     background: var(--card-bg);
