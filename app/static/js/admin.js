@@ -184,7 +184,9 @@ async function loadAPIKeys() {
                 <td>${key.rate_limit}/小时</td>
                 <td>${key.created_at}</td>
                 <td>
-                    <button class="btn btn-danger btn-sm" onclick="deleteKey(${key.id})">删除</button>
+                    ${key.is_active
+                        ? `<button class="btn btn-danger btn-sm" onclick="deleteKey(${key.id})">吊销</button>`
+                        : '<button class="btn btn-sm" disabled style="background: #94a3b8; color: white; cursor: not-allowed;">已吊销</button>'}
                 </td>
             </tr>
         `).join('');
@@ -369,9 +371,9 @@ function copyToClipboard(text) {
     });
 }
 
-// 删除 API Key
+// 吊销 API Key
 async function deleteKey(keyId) {
-    const confirmed = confirm('确定要删除这个 API 密钥吗？\n\n删除后无法恢复，使用此密钥的应用将无法访问 API。');
+    const confirmed = confirm('确定要吊销这个 API 密钥吗？\n\n吊销后使用此密钥的应用将无法访问 API，历史日志会保留。');
 
     if (!confirmed) return;
 
@@ -382,17 +384,17 @@ async function deleteKey(keyId) {
         });
 
         if (!response.ok) {
-            throw new Error('删除失败');
+            throw new Error('吊销失败');
         }
 
-        alert('✓ API 密钥已删除');
+        alert('✓ API 密钥已吊销');
 
         // 重新加载列表
         await loadAPIKeys();
 
     } catch (error) {
-        console.error('删除密钥失败:', error);
-        alert(`❌ 删除失败: ${error.message}`);
+        console.error('吊销密钥失败:', error);
+        alert(`❌ 吊销失败: ${error.message}`);
     }
 }
 
@@ -1888,14 +1890,27 @@ function loadDocs() {
     document.getElementById('content-area').innerHTML = `
         <div class="card">
             <h3 class="card-title">API 接口文档</h3>
+            <p style="color: #475569; margin-top: 0.75rem;">
+                客户端只需要调用公开翻译接口；管理员先在后台创建 API Key，再交给客户端使用。完整 Swagger 文档可访问 <code>/docs</code>，OpenAPI JSON 为 <code>/openapi.json</code>。
+            </p>
 
-            <h4 style="margin-top: 2rem;">1. 翻译接口</h4>
+            <h4 style="margin-top: 2rem;">1. 调用流程</h4>
+            <ol style="line-height: 1.8;">
+                <li>管理员登录 <code>POST /admin/login</code>，获得 JWT Token。</li>
+                <li>管理员创建 API Key：<code>POST /admin/api-keys</code>。</li>
+                <li>客户端携带 <code>X-API-Key</code> 调用 <code>POST /translate</code>。</li>
+                <li>服务按请求中的 <code>model</code> 直接调用对应本地模型；不会自动切换备用模型。</li>
+                <li>成功和已认证失败都会写入调用日志，用于统计和限流。</li>
+            </ol>
+
+            <h4 style="margin-top: 2rem;">2. 公共翻译接口</h4>
             <p><strong>端点:</strong> <code>POST /translate</code></p>
-            <p><strong>认证:</strong> API Key (请求头: <code>X-API-Key: your_api_key</code>)</p>
+            <p><strong>认证:</strong> API Key，请求头 <code>X-API-Key: sk_xxx</code></p>
+            <p><strong>Content-Type:</strong> <code>application/json</code></p>
 
             <h5>请求示例:</h5>
             <pre style="background: var(--bg-color); padding: 1rem; border-radius: 0.5rem; overflow-x: auto;">
-curl -X POST "https://your-domain.com/translate" \\
+curl -X POST "http://localhost:8000/translate" \\
   -H "Content-Type: application/json" \\
   -H "X-API-Key: sk_your_api_key" \\
   -d '{
@@ -1905,6 +1920,23 @@ curl -X POST "https://your-domain.com/translate" \\
     "model": "argos"
   }'
             </pre>
+
+            <h5>请求字段:</h5>
+            <table style="margin-top: 0.5rem;">
+                <thead>
+                    <tr>
+                        <th>字段</th>
+                        <th>必填</th>
+                        <th>说明</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr><td><code>text</code></td><td>是</td><td>待翻译文本，不能为空；会尽量保留换行、空格、Markdown、HTML、JSON/YAML 等结构。</td></tr>
+                    <tr><td><code>source_lang</code></td><td>是</td><td>源语言代码，例如 <code>en</code>、<code>zh</code>。</td></tr>
+                    <tr><td><code>target_lang</code></td><td>是</td><td>目标语言代码，不能和源语言相同。</td></tr>
+                    <tr><td><code>model</code></td><td>否</td><td>指定模型 ID；不传时使用系统默认模型。</td></tr>
+                </tbody>
+            </table>
 
             <h5>响应示例:</h5>
             <pre style="background: var(--bg-color); padding: 1rem; border-radius: 0.5rem; overflow-x: auto;">
@@ -1917,27 +1949,74 @@ curl -X POST "https://your-domain.com/translate" \\
 }
             </pre>
 
-            <h4 style="margin-top: 2rem;">2. 支持的语言</h4>
+            <h4 style="margin-top: 2rem;">3. 模型 ID</h4>
+            <table style="margin-top: 0.5rem;">
+                <thead>
+                    <tr>
+                        <th>model</th>
+                        <th>说明</th>
+                        <th>使用条件</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr><td><code>argos</code></td><td>轻量级离线翻译</td><td>需安装对应 Argos 语言包。</td></tr>
+                    <tr><td><code>marian</code></td><td>Helsinki-NLP Opus-MT</td><td>需下载对应语言对模型。</td></tr>
+                    <tr><td><code>m2m100</code></td><td>facebook/m2m100_418M</td><td>需下载标准 M2M100 模型。</td></tr>
+                    <tr><td><code>m2m100_1_2b</code></td><td>facebook/m2m100_1.2B</td><td>需下载 1.2B 模型，本地推理更慢。</td></tr>
+                    <tr><td><code>nllb</code></td><td>facebook/nllb-200-distilled-600M</td><td>需下载 NLLB 模型；可通过 <code>NLLB_MODEL</code> 配置更大版本。</td></tr>
+                </tbody>
+            </table>
+
+            <h4 style="margin-top: 2rem;">4. 支持的语言代码</h4>
+            <p style="color: #475569;">实际可用语言对取决于对应模型或语言包是否已经下载，可在“模型管理”页面查看状态。</p>
             <ul>
-                <li>英语 (en)</li>
-                <li>中文 (zh)</li>
-                <li>日语 (ja)</li>
-                <li>韩语 (ko)</li>
-                <li>法语 (fr)</li>
-                <li>德语 (de)</li>
-                <li>西班牙语 (es)</li>
-                <li>俄语 (ru)</li>
+                <li><code>en</code> 英语</li>
+                <li><code>zh</code> 简体中文</li>
+                <li><code>zt</code> 繁体中文，主要用于 Argos/NLLB 已安装或已支持场景</li>
+                <li><code>ja</code> 日语</li>
+                <li><code>ko</code> 韩语</li>
+                <li><code>fr</code> 法语</li>
+                <li><code>de</code> 德语</li>
+                <li><code>es</code> 西班牙语</li>
+                <li><code>ru</code> 俄语</li>
+                <li><code>ar</code>、<code>hi</code>、<code>th</code> 等：NLLB 支持，M2M100 当前页面只开放常用语言。</li>
             </ul>
 
-            <h4 style="margin-top: 2rem;">3. 速率限制</h4>
-            <p>默认: 100 请求/小时 (可在 API Key 设置中调整)</p>
+            <h4 style="margin-top: 2rem;">5. 管理端接口</h4>
+            <table style="margin-top: 0.5rem;">
+                <thead>
+                    <tr>
+                        <th>接口</th>
+                        <th>认证</th>
+                        <th>用途</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr><td><code>POST /admin/login</code></td><td>无</td><td>管理员登录，返回 JWT。</td></tr>
+                    <tr><td><code>GET /admin/api-keys</code></td><td>Bearer JWT</td><td>查看 API Key 列表。</td></tr>
+                    <tr><td><code>POST /admin/api-keys</code></td><td>Bearer JWT</td><td>创建 API Key。</td></tr>
+                    <tr><td><code>DELETE /admin/api-keys/{id}</code></td><td>Bearer JWT</td><td>吊销 API Key，历史日志会保留归属。</td></tr>
+                    <tr><td><code>GET /admin/models/status</code></td><td>Bearer JWT</td><td>查看模型、语言包、本地缓存完整性。</td></tr>
+                    <tr><td><code>GET /admin/models/downloads/{task_id}</code></td><td>Bearer JWT</td><td>查询模型/语言包下载进度。</td></tr>
+                </tbody>
+            </table>
 
-            <h4 style="margin-top: 2rem;">4. 错误代码</h4>
+            <h4 style="margin-top: 2rem;">6. 速率限制</h4>
+            <p>每个 API Key 有独立限流，默认 <code>100</code> 请求/小时，可在创建 API Key 或系统设置中调整。已认证的成功与失败翻译请求都会计入窗口。</p>
+
+            <h4 style="margin-top: 2rem;">7. 错误返回</h4>
+            <p>错误响应使用 FastAPI 标准结构，主体通常为：</p>
+            <pre style="background: var(--bg-color); padding: 1rem; border-radius: 0.5rem; overflow-x: auto;">
+{
+  "detail": "错误说明"
+}
+            </pre>
             <ul>
-                <li><code>400</code>: 请求参数错误</li>
-                <li><code>401</code>: API Key 无效</li>
-                <li><code>429</code>: 超过速率限制</li>
-                <li><code>500</code>: 服务器错误</li>
+                <li><code>400</code>: 不支持的模型、语言对不可用、源语言和目标语言相同。</li>
+                <li><code>401</code>: 缺少 API Key、API Key 无效或已过期。</li>
+                <li><code>422</code>: JSON 字段缺失、类型错误或 <code>text</code> 为空。</li>
+                <li><code>429</code>: 超过 API Key 速率限制。</li>
+                <li><code>500</code>: 模型未初始化或服务器内部错误。</li>
             </ul>
         </div>
     `;

@@ -59,7 +59,7 @@ class UserResponse(BaseModel):
 class APIKeyCreate(BaseModel):
     name: str = Field(..., description="密钥名称")
     description: Optional[str] = Field(None, description="密钥描述")
-    rate_limit: int = Field(100, ge=1, description="每小时请求限制")
+    rate_limit: int = Field(100, ge=1, description="每个限流周期内的请求限制")
     expires_days: Optional[int] = Field(None, description="有效天数")
 
 class APIKeyResponse(BaseModel):
@@ -96,6 +96,7 @@ class SystemStatus(BaseModel):
 class AdminSettings(BaseModel):
     default_model: str
     api_rate_limit: int = Field(..., ge=1)
+    api_rate_limit_period: int = Field(..., ge=1)
     token_expire_minutes: int = Field(..., ge=1)
 
 class PasswordChangeRequest(BaseModel):

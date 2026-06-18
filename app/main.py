@@ -11,7 +11,7 @@ from starlette.concurrency import run_in_threadpool
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select, func, and_
 from threading import Thread
 import time
 import uvicorn
@@ -235,7 +235,7 @@ async def delete_api_key(
     credentials: HTTPAuthorizationCredentials = Security(security),
     db: AsyncSession = Depends(get_db)
 ):
-    """删除 API 密钥"""
+    """吊销 API 密钥，保留历史日志归属"""
     current_user = await get_current_user_from_token(credentials.credentials, db)
     result = await db.execute(select(APIKey).where(APIKey.id == key_id))
     key = result.scalar_one_or_none()
@@ -243,9 +243,9 @@ async def delete_api_key(
     if not key:
         raise HTTPException(status_code=404, detail="密钥不存在")
 
-    await db.delete(key)
+    key.is_active = False
     await db.commit()
-    return {"message": "删除成功"}
+    return {"message": "密钥已吊销"}
 
 # ===== 管理后台测试翻译接口（使用 JWT 认证）=====
 
@@ -398,7 +398,13 @@ async def list_translation_logs(
 
     result = await db.execute(
         select(TranslationLog, APIKey.name, APIKey.key)
-        .outerjoin(APIKey, TranslationLog.api_key_id == APIKey.id)
+        .outerjoin(
+            APIKey,
+            and_(
+                TranslationLog.api_key_id == APIKey.id,
+                TranslationLog.created_at >= APIKey.created_at
+            )
+        )
         .order_by(TranslationLog.created_at.desc())
         .limit(limit)
         .offset(offset)
@@ -525,10 +531,12 @@ async def get_api_key_from_header(
         raise HTTPException(status_code=401, detail="无效的 API Key")
 
     window_start = datetime.utcnow() - timedelta(seconds=config.API_RATE_LIMIT_PERIOD)
+    key_created_at = (key_obj.created_at - timedelta(seconds=1)) if key_obj.created_at else datetime.min
     usage_result = await db.execute(
         select(func.count(TranslationLog.id)).where(
             TranslationLog.api_key_id == key_obj.id,
-            TranslationLog.created_at >= window_start
+            TranslationLog.created_at >= window_start,
+            TranslationLog.created_at >= key_created_at
         )
     )
     usage_count = usage_result.scalar() or 0
@@ -547,9 +555,27 @@ async def translate(
     start = time.time()
     model_name = request.model or config.DEFAULT_MODEL
     translated_text = None
-    error_msg = None
+
+    async def record_translation_log(success: bool, error_message: str | None = None):
+        response_time = time.time() - start
+        log = TranslationLog(
+            api_key_id=api_key.id,
+            source_lang=request.source_lang,
+            target_lang=request.target_lang,
+            model_used=model_name,
+            char_count=len(request.text),
+            success=success,
+            error_message=error_message,
+            response_time=response_time
+        )
+        db.add(log)
+        await db.commit()
+        return response_time
 
     try:
+        if request.source_lang == request.target_lang:
+            raise HTTPException(status_code=400, detail="源语言和目标语言不能相同")
+
         if model_name not in config.AVAILABLE_MODELS:
             raise HTTPException(status_code=400, detail=f"不支持的模型: {model_name}")
 
@@ -568,20 +594,7 @@ async def translate(
         if translated_text is None:
             raise HTTPException(status_code=400, detail=f"模型 {model_name} 翻译失败或不支持该语言对")
 
-        response_time = time.time() - start
-
-        # 记录日志
-        log = TranslationLog(
-            api_key_id=api_key.id,
-            source_lang=request.source_lang,
-            target_lang=request.target_lang,
-            model_used=model_name,
-            char_count=len(request.text),
-            success=True,
-            response_time=response_time
-        )
-        db.add(log)
-        await db.commit()
+        await record_translation_log(success=True)
 
         return TranslationResponse(
             translated_text=translated_text,
@@ -591,25 +604,12 @@ async def translate(
             success=True
         )
 
-    except HTTPException:
+    except HTTPException as e:
+        await record_translation_log(success=False, error_message=str(e.detail))
         raise
     except Exception as e:
         error_msg = str(e)
-        response_time = time.time() - start
-
-        # 记录失败日志
-        log = TranslationLog(
-            api_key_id=api_key.id,
-            source_lang=request.source_lang,
-            target_lang=request.target_lang,
-            model_used=model_name,
-            char_count=len(request.text),
-            success=False,
-            error_message=error_msg,
-            response_time=response_time
-        )
-        db.add(log)
-        await db.commit()
+        await record_translation_log(success=False, error_message=error_msg)
 
         raise HTTPException(status_code=500, detail=f"翻译错误: {error_msg}")
 

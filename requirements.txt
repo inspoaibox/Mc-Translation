@@ -1,10 +1,12 @@
 fastapi==0.115.0
 uvicorn[standard]==0.32.0
+
 transformers==4.46.0
-torch>=2.11.0
+torch==2.4.1
 sentencepiece==0.2.0
-sacremoses==0.1.1
+sacremoses==0.0.53
 argostranslate==1.9.6
+
 pydantic==2.9.2
 python-multipart==0.0.12
 python-jose[cryptography]==3.3.0

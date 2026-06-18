@@ -26,8 +26,8 @@ class Config:
     API_TITLE = "本地翻译API"
     API_VERSION = "2.0.0"
     API_DESCRIPTION = "整合 Argos、MarianMT、M2M100、NLLB 的安全本地翻译服务"
-    API_RATE_LIMIT = int(os.getenv("API_RATE_LIMIT", "100"))
-    API_RATE_LIMIT_PERIOD = int(os.getenv("API_RATE_LIMIT_PERIOD", "3600"))
+    API_RATE_LIMIT = 100
+    API_RATE_LIMIT_PERIOD = 3600
 
     # 模型配置
     AVAILABLE_MODELS = ["argos", "marian", "m2m100", "m2m100_1_2b", "nllb"]
@@ -72,7 +72,7 @@ class Config:
     }
 
     # M2M100 模型路径
-    M2M100_MODEL = "facebook/m2m100_418M"
+    M2M100_MODEL = os.getenv("M2M100_MODEL", "facebook/m2m100_418M")
     M2M100_LARGE_MODEL = os.getenv("M2M100_LARGE_MODEL", "facebook/m2m100_1.2B")
 
     # NLLB 模型路径。默认使用相对更适合本地部署的 distilled 版本。
