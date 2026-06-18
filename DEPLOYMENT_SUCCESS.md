@@ -194,8 +194,16 @@ console.log(result.translated_text);
 
 ```bash
 cd ~/Mc-Translation
+sudo apt install -y python3.10-venv python3-pip
+python3 -m venv venv
 source venv/bin/activate
-pm2 start "venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000" --name mc-translation
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+pm2 delete mc-translation || true
+pm2 start /root/Mc-Translation/venv/bin/python \
+  --name mc-translation \
+  --cwd /root/Mc-Translation \
+  -- -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 pm2 save
 pm2 startup systemd -u root --hp /root
 ```

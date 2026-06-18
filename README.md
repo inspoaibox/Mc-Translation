@@ -252,12 +252,30 @@ sudo apt install -y nodejs npm
 sudo npm install -g pm2
 ```
 
-在项目目录启动服务：
+创建虚拟环境并安装依赖：
 
 ```bash
 cd ~/Mc-Translation
+sudo apt install -y python3.10-venv python3-pip
+python3 -m venv venv
 source venv/bin/activate
-pm2 start "venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000" --name mc-translation
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+```
+
+如果之前启动失败过，先删除 PM2 里的旧进程：
+
+```bash
+pm2 delete mc-translation || true
+```
+
+使用项目绝对路径启动服务：
+
+```bash
+pm2 start /root/Mc-Translation/venv/bin/python \
+  --name mc-translation \
+  --cwd /root/Mc-Translation \
+  -- -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
 检查服务：
@@ -288,6 +306,8 @@ systemctl status pm2-root
 pm2 restart mc-translation --update-env
 pm2 save
 ```
+
+如果日志出现 `venv/bin/python: No such file or directory`，说明虚拟环境不存在或 PM2 启动目录不对。重新执行上面的 `python3 -m venv venv`，并使用 `/root/Mc-Translation/venv/bin/python` 这种绝对路径启动。
 
 ### 方案 4: 使用 Docker
 
