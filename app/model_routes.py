@@ -170,6 +170,28 @@ def monitor_huggingface_cache(
 def run_threaded_download(target, *args):
     Thread(target=target, args=args, daemon=True).start()
 
+def create_transformers_converter(model_path: str, copy_files: list[str]):
+    """Create a CTranslate2 converter compatible with Transformers 4.x and 5.x."""
+    from ctranslate2.converters import TransformersConverter
+
+    class CompatibleTransformersConverter(TransformersConverter):
+        def load_model(self, model_class, model_name_or_path, **kwargs):
+            try:
+                return super().load_model(model_class, model_name_or_path, **kwargs)
+            except TypeError as error:
+                if "unexpected keyword argument 'dtype'" not in str(error) or "dtype" not in kwargs:
+                    raise
+
+                dtype = kwargs.pop("dtype")
+                if dtype is not None and "torch_dtype" not in kwargs:
+                    kwargs["torch_dtype"] = dtype
+                return super().load_model(model_class, model_name_or_path, **kwargs)
+
+    return CompatibleTransformersConverter(
+        model_path,
+        copy_files=copy_files
+    )
+
 class InstallRequest(BaseModel):
     source_lang: str
     target_lang: str
@@ -591,8 +613,6 @@ async def convert_marian_model_to_ct2(
 
 def convert_marian_model_to_ct2_task(task_id: str, model_name: str):
     try:
-        from ctranslate2.converters import TransformersConverter
-
         update_download_task(task_id, status="running", percent=5, message="检查本地 MarianMT 模型...")
         snapshot_path = get_huggingface_snapshot_path(model_name)
         if not snapshot_path:
@@ -623,10 +643,7 @@ def convert_marian_model_to_ct2_task(task_id: str, model_name: str):
             if os.path.exists(os.path.join(snapshot_path, file_name))
         ]
 
-        converter = TransformersConverter(
-            snapshot_path,
-            copy_files=copy_files
-        )
+        converter = create_transformers_converter(snapshot_path, copy_files)
 
         update_download_task(
             task_id,
@@ -745,8 +762,6 @@ def start_m2m100_ct2_conversion(model_name: str, kind: str):
 
 def convert_m2m100_model_to_ct2_task(task_id: str, model_name: str):
     try:
-        from ctranslate2.converters import TransformersConverter
-
         update_download_task(task_id, status="running", percent=5, message="检查本地 M2M100 模型...")
         snapshot_path = get_huggingface_snapshot_path(model_name)
         if not snapshot_path:
@@ -775,10 +790,7 @@ def convert_m2m100_model_to_ct2_task(task_id: str, model_name: str):
             if os.path.exists(os.path.join(snapshot_path, file_name))
         ]
 
-        converter = TransformersConverter(
-            snapshot_path,
-            copy_files=copy_files
-        )
+        converter = create_transformers_converter(snapshot_path, copy_files)
 
         update_download_task(
             task_id,
