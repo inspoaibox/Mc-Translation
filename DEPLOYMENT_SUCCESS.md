@@ -176,14 +176,21 @@ console.log(result.translated_text);
 
 ## 🚀 部署到公网
 
-### 方案 1: 使用 Nginx（推荐）
+### 方案 1: 使用 Caddy（推荐，自动 HTTPS）
+
+1. 域名解析到服务器公网 IP
+2. 应用监听本机 `127.0.0.1:8000`
+3. 在 `/etc/caddy/Caddyfile` 配置反向代理（完整配置见 README.md）
+4. Caddy 自动申请和续期 HTTPS 证书
+
+### 方案 2: 使用 Nginx
 
 1. 安装 Nginx
 2. 配置反向代理（见 README.md）
 3. 配置 SSL 证书
 4. 设置为系统服务
 
-### 方案 2: 使用 Docker
+### 方案 3: 使用 Docker
 
 ```bash
 # 构建镜像
@@ -196,7 +203,7 @@ docker run -d -p 8000:8000 \
   translation-api
 ```
 
-### 方案 3: 使用 Systemd
+### 方案 4: 使用 Systemd
 
 详见 README.md 中的完整步骤
 

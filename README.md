@@ -170,7 +170,59 @@ server {
 }
 ```
 
-### 方案 2: 使用 Docker
+### 方案 2: 使用 Caddy 反向代理
+
+Caddy 会自动申请和续期 Let's Encrypt HTTPS 证书，适合单机公网部署。
+
+1. 确认域名 `your-domain.com` 已解析到服务器公网 IP。
+2. 只开放公网 `80` / `443`，应用服务监听本机 `127.0.0.1:8000`。
+3. 写入 Caddy 配置：
+
+```bash
+sudo nano /etc/caddy/Caddyfile
+```
+
+```caddyfile
+your-domain.com {
+    encode zstd gzip
+
+    request_body {
+        max_size 20MB
+    }
+
+    reverse_proxy 127.0.0.1:8000 {
+        header_up Host {host}
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+    }
+
+    log {
+        output file /var/log/caddy/translation-api.log
+        format json
+    }
+}
+```
+
+启动或重载：
+
+```bash
+sudo caddy validate --config /etc/caddy/Caddyfile
+sudo systemctl reload caddy
+```
+
+反向代理模式下建议这样启动服务：
+
+```bash
+uvicorn app.main:app --host 127.0.0.1 --port 8000
+```
+
+访问地址：
+
+- 管理后台：`https://your-domain.com/admin/login`
+- API 文档：`https://your-domain.com/docs`
+- 翻译接口：`https://your-domain.com/translate`
+
+### 方案 3: 使用 Docker
 
 创建 `Dockerfile`:
 
@@ -196,7 +248,7 @@ docker run -d -p 8000:8000 --name translation-api \
   translation-api
 ```
 
-### 方案 3: 使用 Systemd 服务
+### 方案 4: 使用 Systemd 服务
 
 创建 `/etc/systemd/system/translation-api.service`:
 
@@ -245,7 +297,7 @@ ACCESS_TOKEN_EXPIRE_MINUTES=30
 
 **强烈建议**在公网部署时启用 HTTPS：
 
-使用 Let's Encrypt 免费证书：
+如果使用 Caddy，配置域名后会自动申请和续期证书。如果使用 Nginx，可以使用 Let's Encrypt 免费证书：
 
 ```bash
 sudo apt install certbot python3-certbot-nginx

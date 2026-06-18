@@ -189,6 +189,7 @@ Mc-Translation/
 | **直接运行** | 简单快速 | 不稳定 | 开发测试 |
 | **Systemd** | 自动重启 | Linux 限定 | VPS 部署 |
 | **Docker** | 隔离环境 | 资源占用 | 容器化部署 |
+| **Caddy + Uvicorn** | 自动 HTTPS，配置简单 | 高级流量策略较少 | 单机公网部署 |
 | **Nginx + Uvicorn** | 负载均衡 | 配置复杂 | 生产环境 |
 | **Gunicorn + Workers** | 高并发 | 内存占用 | 高流量场景 |
 

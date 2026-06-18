@@ -181,7 +181,7 @@ async function loadAPIKeys() {
                 <td><span class="badge ${key.is_active ? 'badge-success' : 'badge-danger'}">
                     ${key.is_active ? '✓ 活跃' : '✗ 禁用'}
                 </span></td>
-                <td>${key.rate_limit}/小时</td>
+                <td>${key.rate_limit}/周期</td>
                 <td>${key.created_at}</td>
                 <td>
                     ${key.is_active
@@ -232,12 +232,14 @@ async function loadAPIKeys() {
 async function createAPIKey() {
     const contentArea = document.getElementById('content-area');
     let defaultRateLimit = 100;
+    let defaultRateLimitPeriod = 3600;
 
     try {
         const settingsResponse = await fetch('/admin/settings', { headers });
         if (settingsResponse.ok) {
             const settings = await settingsResponse.json();
             defaultRateLimit = settings.api_rate_limit || defaultRateLimit;
+            defaultRateLimitPeriod = settings.api_rate_limit_period || defaultRateLimitPeriod;
         }
     } catch (error) {
         console.warn('读取默认速率限制失败:', error);
@@ -266,9 +268,10 @@ async function createAPIKey() {
                     </div>
 
                     <div style="margin-bottom: 1.5rem;">
-                        <label style="display: block; margin-bottom: 0.5rem; font-weight: 500;">速率限制（请求/小时）</label>
+                        <label style="display: block; margin-bottom: 0.5rem; font-weight: 500;">速率限制（请求/周期）</label>
                         <input type="number" id="key-rate-limit" value="${defaultRateLimit}" min="1" max="10000"
                                style="width: 100%; padding: 0.75rem; border: 2px solid var(--border-color); border-radius: 0.5rem; font-size: 1rem;">
+                        <p style="color: #64748b; font-size: 0.875rem; margin-top: 0.5rem;">当前系统限流周期：${defaultRateLimitPeriod} 秒</p>
                     </div>
 
                     <div style="display: flex; gap: 1rem;">
@@ -343,7 +346,7 @@ async function submitCreateAPIKey(event) {
                     <div style="background: #f9fafb; padding: 1rem; border-radius: 0.5rem; margin-bottom: 1.5rem;">
                         <p style="margin: 0; color: #666;"><strong>名称:</strong> ${name}</p>
                         ${description ? `<p style="margin: 0.5rem 0 0 0; color: #666;"><strong>描述:</strong> ${description}</p>` : ''}
-                        <p style="margin: 0.5rem 0 0 0; color: #666;"><strong>速率限制:</strong> ${rateLimit} 请求/小时</p>
+                        <p style="margin: 0.5rem 0 0 0; color: #666;"><strong>速率限制:</strong> ${rateLimit} 请求/周期</p>
                     </div>
 
                     <button onclick="loadAPIKeys()" class="btn btn-primary"
@@ -1719,8 +1722,14 @@ async function loadSettings() {
                 </div>
 
                 <div class="form-group" style="margin-bottom: 1.5rem;">
-                    <label style="display: block; margin-bottom: 0.5rem; font-weight: 500;">API 速率限制（请求/小时）</label>
+                    <label style="display: block; margin-bottom: 0.5rem; font-weight: 500;">API 速率限制（请求/周期）</label>
                     <input type="number" id="settings-rate-limit" class="form-control" value="${settings.api_rate_limit || 100}" min="1"
+                           style="width: 100%; padding: 0.5rem; border: 2px solid var(--border-color); border-radius: 0.5rem;">
+                </div>
+
+                <div class="form-group" style="margin-bottom: 1.5rem;">
+                    <label style="display: block; margin-bottom: 0.5rem; font-weight: 500;">API 限流周期（秒）</label>
+                    <input type="number" id="settings-rate-limit-period" class="form-control" value="${settings.api_rate_limit_period || 3600}" min="1"
                            style="width: 100%; padding: 0.5rem; border: 2px solid var(--border-color); border-radius: 0.5rem;">
                 </div>
 
@@ -1802,13 +1811,14 @@ async function loadSettings() {
 async function saveSettings() {
     const defaultModel = document.getElementById('settings-default-model')?.value || 'argos';
     const rateLimit = parseInt(document.getElementById('settings-rate-limit')?.value, 10) || 100;
+    const rateLimitPeriod = parseInt(document.getElementById('settings-rate-limit-period')?.value, 10) || 3600;
     const tokenExpire = parseInt(document.getElementById('settings-token-expire')?.value, 10) || 30;
 
     const confirmMsg = `确定保存以下设置吗？\n\n` +
                        `默认模型: ${defaultModel}\n` +
-                       `速率限制: ${rateLimit} 请求/小时\n` +
+                       `速率限制: ${rateLimit} 请求/${rateLimitPeriod} 秒\n` +
                        `Token 过期: ${tokenExpire} 分钟\n\n` +
-                       `注意：部分设置需要重启服务生效`;
+                       `这些设置会立即保存到系统配置`;
 
     if (!confirm(confirmMsg)) return;
 
@@ -1819,6 +1829,7 @@ async function saveSettings() {
             body: JSON.stringify({
                 default_model: defaultModel,
                 api_rate_limit: rateLimit,
+                api_rate_limit_period: rateLimitPeriod,
                 token_expire_minutes: tokenExpire
             })
         });
@@ -2002,7 +2013,7 @@ curl -X POST "http://localhost:8000/translate" \\
             </table>
 
             <h4 style="margin-top: 2rem;">6. 速率限制</h4>
-            <p>每个 API Key 有独立限流，默认 <code>100</code> 请求/小时，可在创建 API Key 或系统设置中调整。已认证的成功与失败翻译请求都会计入窗口。</p>
+            <p>每个 API Key 有独立限流，默认 <code>100</code> 请求 / <code>3600</code> 秒周期；请求数和周期都可在系统设置中调整。已认证的成功与失败翻译请求都会计入窗口。</p>
 
             <h4 style="margin-top: 2rem;">7. 错误返回</h4>
             <p>错误响应使用 FastAPI 标准结构，主体通常为：</p>

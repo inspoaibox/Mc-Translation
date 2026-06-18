@@ -66,6 +66,7 @@ async def lifespan(app: FastAPI):
             "device",
             "default_model",
             "api_rate_limit",
+            "api_rate_limit_period",
             "access_token_expire_minutes",
         ])))
         saved_config = {item.key: item.value for item in config_result.scalars().all()}
@@ -79,6 +80,12 @@ async def lifespan(app: FastAPI):
         if saved_config.get("api_rate_limit"):
             try:
                 config.API_RATE_LIMIT = int(saved_config["api_rate_limit"])
+            except ValueError:
+                pass
+
+        if saved_config.get("api_rate_limit_period"):
+            try:
+                config.API_RATE_LIMIT_PERIOD = int(saved_config["api_rate_limit_period"])
             except ValueError:
                 pass
 
@@ -448,6 +455,7 @@ async def get_admin_settings(
     return {
         "default_model": config.DEFAULT_MODEL,
         "api_rate_limit": config.API_RATE_LIMIT,
+        "api_rate_limit_period": config.API_RATE_LIMIT_PERIOD,
         "token_expire_minutes": config.ACCESS_TOKEN_EXPIRE_MINUTES,
         "device": config.DEVICE,
         "version": config.API_VERSION,
@@ -477,7 +485,13 @@ async def save_admin_settings(
         raise HTTPException(status_code=400, detail=f"不支持的默认模型: {settings.default_model}")
 
     await upsert_system_config(db, "default_model", settings.default_model, "Default translation model")
-    await upsert_system_config(db, "api_rate_limit", str(settings.api_rate_limit), "Default API key rate limit")
+    await upsert_system_config(db, "api_rate_limit", str(settings.api_rate_limit), "Default API key rate limit per period")
+    await upsert_system_config(
+        db,
+        "api_rate_limit_period",
+        str(settings.api_rate_limit_period),
+        "API key rate limit window in seconds"
+    )
     await upsert_system_config(
         db,
         "access_token_expire_minutes",
@@ -488,6 +502,7 @@ async def save_admin_settings(
 
     config.DEFAULT_MODEL = settings.default_model
     config.API_RATE_LIMIT = settings.api_rate_limit
+    config.API_RATE_LIMIT_PERIOD = settings.api_rate_limit_period
     config.ACCESS_TOKEN_EXPIRE_MINUTES = settings.token_expire_minutes
 
     return {
