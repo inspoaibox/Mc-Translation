@@ -485,6 +485,7 @@ TRANSFORMER_WARMUP_MODELS=marian
 TRANSFORMER_WARMUP_PAIRS=zh-en,en-zh
 MARIAN_BACKEND=auto
 M2M100_BACKEND=auto
+NLLB_BACKEND=auto
 CTRANSLATE2_MODELS_DIR=./models/ctranslate2
 MARIAN_CT2_COMPUTE_TYPE=int8
 MARIAN_CT2_INTER_THREADS=1
@@ -494,6 +495,10 @@ M2M100_CT2_COMPUTE_TYPE=int8
 M2M100_CT2_INTER_THREADS=1
 M2M100_CT2_INTRA_THREADS=0
 M2M100_CT2_MAX_QUEUED_BATCHES=0
+NLLB_CT2_COMPUTE_TYPE=int8
+NLLB_CT2_INTER_THREADS=1
+NLLB_CT2_INTRA_THREADS=0
+NLLB_CT2_MAX_QUEUED_BATCHES=0
 ```
 
 - `TRANSLATION_MAX_NEW_TOKENS`: 单段最大生成长度，越大越慢；短句会自动按输入长度降低上限。
@@ -503,14 +508,16 @@ M2M100_CT2_MAX_QUEUED_BATCHES=0
 - `TRANSFORMER_WARMUP_MODELS`: 默认只预热 `marian`，避免启动时加载 M2M100/NLLB 这类大模型；需要时可设为 `marian,m2m100,nllb`。
 - `MARIAN_BACKEND`: `auto` 会优先使用已转换的 CTranslate2 模型；也可设为 `transformers` 或 `ctranslate2`。
 - `M2M100_BACKEND`: `auto` 会优先使用已转换的 M2M100 CTranslate2 模型；也可设为 `transformers` 或 `ctranslate2`。
+- `NLLB_BACKEND`: `auto` 会优先使用已转换的 NLLB CTranslate2 模型；也可设为 `transformers` 或 `ctranslate2`。
 - `MARIAN_CT2_COMPUTE_TYPE`: CPU 推荐 `int8`；GPU 可按环境改为 `float16` 或 `int8_float16`。
 - `M2M100_CT2_COMPUTE_TYPE`: M2M100 的 CTranslate2 量化类型，CPU 推荐 `int8`。
 - `MARIAN_CT2_INTER_THREADS`: CTranslate2 并行翻译 worker 数。官方 `Translator` 参数用于并行 translations；CPU 小机器建议从 `1` 开始压测。
 - `MARIAN_CT2_INTRA_THREADS`: 每个 CTranslate2 worker 的 OpenMP 线程数，`0` 使用默认值。
 - `MARIAN_CT2_MAX_QUEUED_BATCHES`: CTranslate2 队列上限，`0` 使用自动值；设置过小会让请求等待，设置过大可能增加内存占用。
 - `M2M100_CT2_INTER_THREADS` / `M2M100_CT2_INTRA_THREADS` / `M2M100_CT2_MAX_QUEUED_BATCHES`: M2M100 的 CTranslate2 并行与队列参数。
+- `NLLB_CT2_INTER_THREADS` / `NLLB_CT2_INTRA_THREADS` / `NLLB_CT2_MAX_QUEUED_BATCHES`: NLLB 的 CTranslate2 并行与队列参数。
 
-管理后台“模型管理”中，MarianMT 和 M2M100 模型下载完成后可以点击“转换 CT2”。转换只使用本地已下载模型，不会在翻译请求中联网。转换完成后 `MARIAN_BACKEND=auto` / `M2M100_BACKEND=auto` 会优先调用 CTranslate2。
+管理后台“模型管理”中，MarianMT、M2M100、NLLB 模型下载完成后可以点击“转换 CT2”。转换只使用本地已下载模型，不会在翻译请求中联网。转换完成后 `MARIAN_BACKEND=auto` / `M2M100_BACKEND=auto` / `NLLB_BACKEND=auto` 会优先调用 CTranslate2。
 
 `/translate` 响应会返回可选 `timing` 字段，调用日志也会展示拆分耗时：
 

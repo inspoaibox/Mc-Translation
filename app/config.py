@@ -78,6 +78,7 @@ class Config:
 
     # NLLB 模型路径。默认使用相对更适合本地部署的 distilled 版本。
     NLLB_MODEL = os.getenv("NLLB_MODEL", "facebook/nllb-200-distilled-600M")
+    NLLB_BACKEND = os.getenv("NLLB_BACKEND", "auto").lower()
 
     # 设备配置
     DEVICE = os.getenv("DEVICE", "cpu")
@@ -105,6 +106,10 @@ class Config:
     M2M100_CT2_INTER_THREADS = int(os.getenv("M2M100_CT2_INTER_THREADS", "1"))
     M2M100_CT2_INTRA_THREADS = int(os.getenv("M2M100_CT2_INTRA_THREADS", "0"))
     M2M100_CT2_MAX_QUEUED_BATCHES = int(os.getenv("M2M100_CT2_MAX_QUEUED_BATCHES", "0"))
+    NLLB_CT2_COMPUTE_TYPE = os.getenv("NLLB_CT2_COMPUTE_TYPE", "int8")
+    NLLB_CT2_INTER_THREADS = int(os.getenv("NLLB_CT2_INTER_THREADS", "1"))
+    NLLB_CT2_INTRA_THREADS = int(os.getenv("NLLB_CT2_INTRA_THREADS", "0"))
+    NLLB_CT2_MAX_QUEUED_BATCHES = int(os.getenv("NLLB_CT2_MAX_QUEUED_BATCHES", "0"))
 
     # 启动时预热的 Argos 语言对，避免首个客户请求承担初始化成本
     ARGOS_WARMUP_PAIRS = [

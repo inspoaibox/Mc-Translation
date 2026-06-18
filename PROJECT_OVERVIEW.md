@@ -63,7 +63,7 @@ Mc-Translation/
 - **Argos**: 轻量级、快速
 - **MarianMT**: 高质量、专业；已下载模型可转换 CTranslate2 int8 加速
 - **M2M100**: 多语言支持；标准版和 1.2B 可转换 CTranslate2 int8 加速
-- **NLLB-200**: Meta 多语言翻译模型
+- **NLLB-200**: Meta 多语言翻译模型；可转换 CTranslate2 int8 加速
 
 ### 4. 管理后台 (`templates/`, `static/`)
 - 仪表盘：实时统计
@@ -226,6 +226,7 @@ gunicorn app.main:app \
 - 预加载常用语言对
 - MarianMT 下载后转换 CTranslate2 int8，并使用 `MARIAN_BACKEND=auto`
 - M2M100 下载后转换 CTranslate2 int8，并使用 `M2M100_BACKEND=auto`
+- NLLB 下载后转换 CTranslate2 int8，并使用 `NLLB_BACKEND=auto`
 - 通过调用日志 timing 判断慢在加载、推理还是格式处理
 
 ### 3. 缓存策略

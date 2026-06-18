@@ -370,6 +370,10 @@ async def get_models_status(current_user=Depends(require_admin_user)):
     m2m100_ready_pairs = build_all_language_pairs(MULTILINGUAL_UI_LANGS) if m2m100_downloaded else []
     m2m100_large_ready_pairs = build_all_language_pairs(MULTILINGUAL_UI_LANGS) if m2m100_large_downloaded else []
     nllb_ready_pairs = build_all_language_pairs(MULTILINGUAL_UI_LANGS) if nllb_downloaded else []
+    nllb_ct2_models = [
+        model for model in nllb_models
+        if has_ct2_model_files(model)
+    ]
     m2m100_ct2_models = [
         model for model in m2m100_models
         if has_ct2_model_files(model)
@@ -433,6 +437,9 @@ async def get_models_status(current_user=Depends(require_admin_user)):
             "size": "2.5GB+",
             "downloaded_models": nllb_models,
             "cached_models": nllb_cache_models,
+            "ctranslate2_available": ctranslate2_available,
+            "ctranslate2_models": nllb_ct2_models,
+            "backend": config.NLLB_BACKEND,
             "cache_incomplete": len(nllb_cache_models) > len(nllb_models),
             "ready_pairs": sorted(nllb_ready_pairs),
             "has_downloads": nllb_downloaded
@@ -867,6 +874,92 @@ def download_nllb_model_task(task_id: str, model_name: str):
 
     except Exception as e:
         stop_event.set()
+        fail_download_task(task_id, str(e))
+
+@router.post("/admin/models/nllb/convert-ct2")
+async def convert_nllb_model_to_ct2(current_user=Depends(require_admin_user)):
+    """将已下载的 NLLB 模型转换为 CTranslate2 本地模型。"""
+    if not has_huggingface_model_files(config.NLLB_MODEL):
+        raise HTTPException(status_code=400, detail=f"模型 {config.NLLB_MODEL} 尚未完整下载，不能转换")
+
+    if importlib.util.find_spec("ctranslate2") is None:
+        raise HTTPException(status_code=500, detail="当前环境未安装 ctranslate2")
+
+    task_id = create_download_task("nllb_ct2", config.NLLB_MODEL)
+    run_threaded_download(convert_nllb_model_to_ct2_task, task_id, config.NLLB_MODEL)
+
+    return {
+        "success": True,
+        "task_id": task_id,
+        "message": f"模型 {config.NLLB_MODEL} CTranslate2 转换任务已开始"
+    }
+
+def convert_nllb_model_to_ct2_task(task_id: str, model_name: str):
+    try:
+        update_download_task(task_id, status="running", percent=5, message="检查本地 NLLB 模型...")
+        snapshot_path = get_huggingface_snapshot_path(model_name)
+        if not snapshot_path:
+            raise RuntimeError(f"未找到 {model_name} 的本地 HuggingFace snapshot")
+
+        output_dir = get_ct2_model_dir(model_name)
+        parent_dir = os.path.dirname(output_dir)
+        temp_output_dir = os.path.join(parent_dir, f".{os.path.basename(output_dir)}.{task_id}.tmp")
+        backup_dir = os.path.join(parent_dir, f".{os.path.basename(output_dir)}.{task_id}.bak")
+        os.makedirs(parent_dir, exist_ok=True)
+        shutil.rmtree(temp_output_dir, ignore_errors=True)
+        shutil.rmtree(backup_dir, ignore_errors=True)
+
+        update_download_task(task_id, percent=20, message="准备 CTranslate2 转换器...")
+        copy_candidates = [
+            "tokenizer.json",
+            "tokenizer_config.json",
+            "sentencepiece.bpe.model",
+            "vocab.json",
+            "special_tokens_map.json",
+            "generation_config.json",
+            "added_tokens.json",
+        ]
+        copy_files = [
+            file_name
+            for file_name in copy_candidates
+            if os.path.exists(os.path.join(snapshot_path, file_name))
+        ]
+
+        converter = create_transformers_converter(snapshot_path, copy_files)
+
+        update_download_task(
+            task_id,
+            percent=45,
+            message=f"正在转换为 CTranslate2 ({config.NLLB_CT2_COMPUTE_TYPE})..."
+        )
+        converter.convert(
+            temp_output_dir,
+            quantization=config.NLLB_CT2_COMPUTE_TYPE,
+            force=False
+        )
+
+        update_download_task(task_id, percent=95, message="校验 CTranslate2 模型文件...")
+        if not (
+            os.path.isfile(os.path.join(temp_output_dir, "model.bin"))
+            and os.path.isfile(os.path.join(temp_output_dir, "config.json"))
+        ):
+            raise RuntimeError("转换结束，但未检测到 CTranslate2 model.bin/config.json")
+
+        if os.path.exists(output_dir):
+            os.replace(output_dir, backup_dir)
+        os.replace(temp_output_dir, output_dir)
+        shutil.rmtree(backup_dir, ignore_errors=True)
+
+        finish_download_task(task_id, f"模型 {model_name} 已转换为 CTranslate2: {output_dir}")
+
+    except Exception as e:
+        try:
+            if "temp_output_dir" in locals():
+                shutil.rmtree(temp_output_dir, ignore_errors=True)
+            if "backup_dir" in locals() and os.path.exists(backup_dir) and not os.path.exists(output_dir):
+                os.replace(backup_dir, output_dir)
+        except Exception:
+            pass
         fail_download_task(task_id, str(e))
 
 @router.get("/admin/models/argos/packages")

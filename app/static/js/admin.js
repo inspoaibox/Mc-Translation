@@ -996,9 +996,7 @@ async function loadModels() {
                                 ${nllbDownloadStatus}
                             </td>
                             <td data-download-card>
-                                ${status.nllb?.loaded
-                                    ? "<button class=\"btn btn-sm\" style=\"padding: 0.25rem 0.75rem; font-size: 0.875rem; background: #64748b; color: white; border: none; border-radius: 0.375rem; cursor: pointer;\" onclick=\"showModelInfo('nllb')\">详情</button>"
-                                    : '<button class="btn btn-sm" style="padding: 0.25rem 0.75rem; font-size: 0.875rem; background: #10b981; color: white; border: none; border-radius: 0.375rem; cursor: pointer;" onclick="downloadNLLBModel(event)">下载/修复</button>'}
+                                ${modelActionButton(status.nllb, 'nllb', 'downloadNLLBModel', 'convertNLLBModelToCT2')}
                             </td>
                         </tr>
                     </tbody>
@@ -1172,32 +1170,79 @@ async function manageArgosPackages() {
         const data = await response.json();
         const packages = data.packages || [];
 
-        let packagesHTML = '';
+        const languageName = (code, fallback) => fallback || code;
+        const jsString = (value) => String(value || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+        const grouped = packages.reduce((acc, pkg) => {
+            const key = pkg.from_code || 'unknown';
+            if (!acc[key]) {
+                acc[key] = {
+                    code: key,
+                    name: languageName(key, pkg.from_name),
+                    packages: []
+                };
+            }
+            acc[key].packages.push(pkg);
+            return acc;
+        }, {});
 
-        if (packages.length === 0) {
-            packagesHTML = '<div style="padding: 2rem; text-align: center; color: #666;">暂无可用语言包</div>';
-        } else {
-            packagesHTML = packages.map(pkg => {
+        const groups = Object.values(grouped).sort((a, b) => a.name.localeCompare(b.name));
+        const installedPackages = packages.filter(pkg => pkg.installed);
+        const renderPackageCard = (pkg) => {
                 const statusBadge = pkg.installed
                     ? '<span class="badge badge-success">✓ 已安装</span>'
                     : '<span class="badge" style="background: #e0e7ff; color: #4338ca;">未安装</span>';
 
                 const buttonHTML = pkg.installed
                     ? '<button class="btn btn-sm" disabled style="padding: 0.5rem 1rem; background: #94a3b8; color: white; border: none; border-radius: 0.375rem; cursor: not-allowed;">已安装</button>'
-                    : `<button class="btn btn-sm btn-success" onclick="installArgosPackageReal(event, '${pkg.from_code}', '${pkg.to_code}')" style="padding: 0.5rem 1rem; background: #10b981; color: white; border: none; border-radius: 0.375rem; cursor: pointer;">立即安装</button>`;
+                    : `<button class="btn btn-sm btn-success" onclick="installArgosPackageReal(event, '${jsString(pkg.from_code)}', '${jsString(pkg.to_code)}')" style="padding: 0.5rem 1rem; background: #10b981; color: white; border: none; border-radius: 0.375rem; cursor: pointer;">立即安装</button>`;
 
                 return `
-                    <div data-download-card style="border: 1px solid var(--border-color); padding: 1rem; border-radius: 0.5rem;">
-                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
-                            <h5 style="margin: 0;">${pkg.from_name} → ${pkg.to_name}</h5>
+                    <div data-download-card class="argos-package-card">
+                        <div class="argos-package-card-head">
+                            <h5>${escapeHTML(pkg.from_name)} → ${escapeHTML(pkg.to_name)}</h5>
                             ${statusBadge}
                         </div>
-                        <p style="color: #666; font-size: 0.9rem; margin-bottom: 0.75rem;">${pkg.from_code} → ${pkg.to_code}</p>
+                        <p>${escapeHTML(pkg.from_code)} → ${escapeHTML(pkg.to_code)}</p>
                         ${buttonHTML}
                     </div>
                 `;
-            }).join('');
-        }
+        };
+
+        const renderGrid = (items) => items.length
+            ? `<div class="argos-package-grid">${items.map(renderPackageCard).join('')}</div>`
+            : '<div class="argos-empty">暂无语言包</div>';
+
+        const allPackagesHTML = packages.length
+            ? renderGrid(packages)
+            : '<div class="argos-empty">暂无可用语言包</div>';
+
+        const installedPackagesHTML = installedPackages.length
+            ? renderGrid(installedPackages)
+            : '<div class="argos-empty">当前还没有安装 Argos 语言包</div>';
+
+        const tabsHTML = [
+            `<button type="button" class="argos-tab active" data-argos-tab="all" aria-selected="true">全部 <span>${packages.length}</span></button>`,
+            `<button type="button" class="argos-tab" data-argos-tab="installed" aria-selected="false">已安装 <span>${installedPackages.length}</span></button>`,
+            ...groups.map(group => `
+                <button type="button" class="argos-tab" data-argos-tab="${escapeHTML(group.code)}" aria-selected="false">
+                    ${escapeHTML(group.name)} <span>${group.packages.length}</span>
+                </button>
+            `)
+        ].join('');
+
+        const panelsHTML = [
+            `<section class="argos-tab-panel active" data-argos-panel="all">${allPackagesHTML}</section>`,
+            `<section class="argos-tab-panel" data-argos-panel="installed">${installedPackagesHTML}</section>`,
+            ...groups.map(group => `
+                <section class="argos-tab-panel" data-argos-panel="${escapeHTML(group.code)}">
+                    <div class="argos-source-summary">
+                        <strong>${escapeHTML(group.name)}</strong>
+                        <span>${escapeHTML(group.code)} 可安装 ${group.packages.length} 个目标语言包</span>
+                    </div>
+                    ${renderGrid(group.packages)}
+                </section>
+            `)
+        ].join('');
 
         contentArea.innerHTML = `
             <div class="card">
@@ -1207,13 +1252,18 @@ async function manageArgosPackages() {
                 </div>
 
                 <div style="padding: 1.5rem;">
-                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; gap: 1rem;">
                         <h4 style="margin: 0;">可用语言包 (${packages.length})</h4>
                         <button class="btn" onclick="manageArgosPackages()" style="padding: 0.5rem 1rem; background: #3b82f6; color: white; border: none; border-radius: 0.375rem; cursor: pointer;">🔄 刷新</button>
                     </div>
 
-                    <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 1rem;">
-                        ${packagesHTML}
+                    <div class="argos-package-layout">
+                        <div class="argos-tabs" role="tablist">
+                            ${tabsHTML}
+                        </div>
+                        <div class="argos-panels">
+                            ${panelsHTML}
+                        </div>
                     </div>
 
                     <div style="margin-top: 2rem; padding: 1rem; background: #f0f9ff; border-left: 4px solid #3b82f6; border-radius: 0.5rem;">
@@ -1228,6 +1278,7 @@ async function manageArgosPackages() {
                 </div>
             </div>
         `;
+        bindArgosTabs();
 
     } catch (error) {
         console.error('加载语言包失败:', error);
@@ -1244,6 +1295,27 @@ async function manageArgosPackages() {
             </div>
         `;
     }
+}
+
+function bindArgosTabs() {
+    const tabs = Array.from(document.querySelectorAll('.argos-tab'));
+    const panels = Array.from(document.querySelectorAll('.argos-tab-panel'));
+
+    tabs.forEach(tab => {
+        tab.addEventListener('click', () => {
+            const selected = tab.dataset.argosTab;
+
+            tabs.forEach(item => {
+                const isActive = item === tab;
+                item.classList.toggle('active', isActive);
+                item.setAttribute('aria-selected', String(isActive));
+            });
+
+            panels.forEach(panel => {
+                panel.classList.toggle('active', panel.dataset.argosPanel === selected);
+            });
+        });
+    });
 }
 
 // 真实安装 Argos 语言包
@@ -1706,6 +1778,46 @@ async function downloadNLLBModel(event) {
     }
 }
 
+// 转换 NLLB 模型为 CTranslate2
+async function convertNLLBModelToCT2(event) {
+    const confirmed = confirm(
+        '确定要将 NLLB-200 转换为 CTranslate2 吗？\n\n' +
+        '转换会占用较多 CPU、内存和磁盘空间。完成后 NLLB_BACKEND=auto 会优先调用 CT2 本地模型。'
+    );
+
+    if (!confirmed) return;
+
+    const button = event.currentTarget;
+    button.disabled = true;
+    button.textContent = '转换中...';
+    button.style.background = '#94a3b8';
+
+    try {
+        const response = await fetch('/admin/models/nllb/convert-ct2', {
+            method: 'POST',
+            headers
+        });
+        const result = await response.json();
+
+        if (!response.ok || !result.success || !result.task_id) {
+            throw new Error(result.detail || result.message || '转换失败');
+        }
+
+        await pollDownloadTask(result.task_id, {
+            title: '转换 CT2 NLLB-200',
+            anchor: button,
+            onComplete: async () => {
+                await loadModels();
+            }
+        });
+    } catch (error) {
+        alert(`NLLB CT2 转换失败: ${error.message}`);
+        button.disabled = false;
+        button.textContent = '转换 CT2';
+        button.style.background = '#0f766e';
+    }
+}
+
 // 显示模型信息
 function showModelInfo(modelName) {
     let info = '';
@@ -2151,7 +2263,7 @@ curl -X POST "http://localhost:8000/translate" \\
                     <tr><td><code>marian</code></td><td>Helsinki-NLP Opus-MT</td><td>需下载对应语言对模型；可转换 CTranslate2 int8 后由 <code>MARIAN_BACKEND=auto</code> 优先调用。</td></tr>
                     <tr><td><code>m2m100</code></td><td>facebook/m2m100_418M</td><td>需下载标准 M2M100 模型；可转换 CTranslate2 int8 后由 <code>M2M100_BACKEND=auto</code> 优先调用。</td></tr>
                     <tr><td><code>m2m100_1_2b</code></td><td>facebook/m2m100_1.2B</td><td>需下载 1.2B 模型；可转换 CTranslate2，但转换和本地推理资源占用更高。</td></tr>
-                    <tr><td><code>nllb</code></td><td>facebook/nllb-200-distilled-600M</td><td>需下载 NLLB 模型；可通过 <code>NLLB_MODEL</code> 配置更大版本。</td></tr>
+                    <tr><td><code>nllb</code></td><td>facebook/nllb-200-distilled-600M</td><td>需下载 NLLB 模型；可转换 CTranslate2 int8 后由 <code>NLLB_BACKEND=auto</code> 优先调用。</td></tr>
                 </tbody>
             </table>
 
@@ -2189,6 +2301,7 @@ curl -X POST "http://localhost:8000/translate" \\
                     <tr><td><code>POST /admin/models/marian/convert-ct2</code></td><td>Bearer JWT</td><td>将已下载 MarianMT 转换为 CTranslate2 本地模型。</td></tr>
                     <tr><td><code>POST /admin/models/m2m100/convert-ct2</code></td><td>Bearer JWT</td><td>将已下载 M2M100 标准模型转换为 CTranslate2 本地模型。</td></tr>
                     <tr><td><code>POST /admin/models/m2m100-large/convert-ct2</code></td><td>Bearer JWT</td><td>将已下载 M2M100 1.2B 模型转换为 CTranslate2 本地模型。</td></tr>
+                    <tr><td><code>POST /admin/models/nllb/convert-ct2</code></td><td>Bearer JWT</td><td>将已下载 NLLB 模型转换为 CTranslate2 本地模型。</td></tr>
                 </tbody>
             </table>
 

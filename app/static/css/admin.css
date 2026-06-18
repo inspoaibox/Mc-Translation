@@ -719,6 +719,158 @@ td {
     color: #b91c1c;
 }
 
+/* Argos 语言包管理 */
+.argos-package-layout {
+    display: grid;
+    grid-template-columns: 220px minmax(0, 1fr);
+    gap: 1rem;
+    align-items: start;
+}
+
+.argos-tabs {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    padding: 0.75rem;
+    background: #f8fafc;
+    border: 1px solid var(--border-color);
+    border-radius: 0.75rem;
+    max-height: 62vh;
+    overflow-y: auto;
+}
+
+.argos-tab {
+    width: 100%;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.65rem 0.75rem;
+    border: 1px solid transparent;
+    border-radius: 0.5rem;
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    font: inherit;
+    font-size: 0.92rem;
+    text-align: left;
+    transition: background 0.2s, border-color 0.2s, color 0.2s;
+}
+
+.argos-tab:hover {
+    background: #eef2f7;
+    color: var(--text-primary);
+}
+
+.argos-tab.active {
+    background: white;
+    border-color: #bfdbfe;
+    color: var(--primary-color);
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
+}
+
+.argos-tab span {
+    flex: 0 0 auto;
+    min-width: 1.65rem;
+    padding: 0.1rem 0.45rem;
+    border-radius: 999px;
+    background: #e2e8f0;
+    color: var(--text-secondary);
+    font-size: 0.78rem;
+    font-weight: 700;
+    text-align: center;
+}
+
+.argos-tab.active span {
+    background: #dbeafe;
+    color: #1d4ed8;
+}
+
+.argos-panels {
+    min-width: 0;
+}
+
+.argos-tab-panel {
+    display: none;
+}
+
+.argos-tab-panel.active {
+    display: block;
+}
+
+.argos-source-summary {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 1rem;
+    margin-bottom: 1rem;
+    padding: 0.85rem 1rem;
+    border: 1px solid var(--border-color);
+    border-radius: 0.75rem;
+    background: white;
+}
+
+.argos-source-summary strong {
+    font-size: 1rem;
+}
+
+.argos-source-summary span {
+    color: var(--text-secondary);
+    font-size: 0.88rem;
+}
+
+.argos-package-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 0.85rem;
+}
+
+.argos-package-card {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    min-height: 150px;
+    padding: 1rem;
+    border: 1px solid var(--border-color);
+    border-radius: 0.75rem;
+    background: white;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+
+.argos-package-card-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 0.75rem;
+}
+
+.argos-package-card-head h5 {
+    margin: 0;
+    color: var(--text-primary);
+    font-size: 0.98rem;
+    line-height: 1.35;
+}
+
+.argos-package-card p {
+    margin: 0;
+    color: var(--text-secondary);
+    font-size: 0.88rem;
+}
+
+.argos-package-card .btn {
+    align-self: flex-start;
+    margin-top: auto;
+}
+
+.argos-empty {
+    padding: 2rem;
+    border: 1px dashed #cbd5e1;
+    border-radius: 0.75rem;
+    background: #f8fafc;
+    color: var(--text-secondary);
+    text-align: center;
+}
+
 /* 下载进度 */
 .inline-download-progress {
     margin-top: 0.85rem;
@@ -807,5 +959,29 @@ td {
 
     .translator-actions {
         flex-direction: column;
+    }
+
+    .argos-package-layout {
+        grid-template-columns: 1fr;
+    }
+
+    .argos-tabs {
+        flex-direction: row;
+        overflow-x: auto;
+        max-height: none;
+    }
+
+    .argos-tab {
+        width: auto;
+        min-width: max-content;
+    }
+
+    .argos-source-summary {
+        align-items: flex-start;
+        flex-direction: column;
+    }
+
+    .argos-package-grid {
+        grid-template-columns: 1fr;
     }
 }
