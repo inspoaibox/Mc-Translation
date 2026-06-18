@@ -12,6 +12,35 @@ const headers = {
     'Content-Type': 'application/json'
 };
 
+let apiDocsBaseUrl = '';
+
+const CAUSAL_LM_MODELS = [
+    {
+        value: 'qwen3_1_7b',
+        label: 'Qwen3 1.7B',
+        modelName: 'Qwen/Qwen3-1.7B',
+        size: '~3.5GB',
+        badge: '通用大模型',
+        note: 'Qwen3 小型推理/指令模型，适合通用文本翻译'
+    },
+    {
+        value: 'gemma3_1b',
+        label: 'Gemma 3 1B',
+        modelName: 'google/gemma-3-1b-it',
+        size: '~2GB',
+        badge: '需授权',
+        note: 'Google Gemma 3 指令模型，下载可能需要 HuggingFace 授权'
+    },
+    {
+        value: 'qwen2_5_0_5b',
+        label: 'Qwen2.5 0.5B',
+        modelName: 'Qwen/Qwen2.5-0.5B-Instruct',
+        size: '~1GB',
+        badge: '轻量',
+        note: '轻量指令模型，资源占用更低'
+    }
+];
+
 function revealAdmin() {
     document.documentElement.classList.remove('auth-pending');
     document.documentElement.classList.add('auth-ready');
@@ -104,7 +133,7 @@ async function loadPage(page) {
             break;
         case 'docs':
             pageTitle.textContent = 'API 文档';
-            loadDocs();
+            await loadDocs();
             break;
     }
 }
@@ -502,7 +531,8 @@ async function loadTranslator() {
         { value: 'marian', label: 'MarianMT (准确)' },
         { value: 'm2m100', label: 'M2M100 (多语言)' },
         { value: 'm2m100_1_2b', label: 'M2M100 1.2B (高精度)' },
-        { value: 'nllb', label: 'NLLB-200 (多语言)' }
+        { value: 'nllb', label: 'NLLB-200 (多语言)' },
+        ...CAUSAL_LM_MODELS.map(model => ({ value: model.value, label: model.label }))
     ].map(model => {
         const ready = isReady(model.value);
         return `<option value="${model.value}" ${ready ? '' : 'disabled'}>${model.label}${ready ? '' : ' - 未就绪'}</option>`;
@@ -651,6 +681,49 @@ function escapeJSString(value) {
         .replace(/'/g, "\\'")
         .replace(/\r/g, '\\r')
         .replace(/\n/g, '\\n');
+}
+
+function normalizeApiBaseUrl(value) {
+    return String(value || '').trim().replace(/\/+$/, '');
+}
+
+function isValidHttpApiBaseUrl(value) {
+    try {
+        const url = new URL(value);
+        return ['http:', 'https:'].includes(url.protocol) && Boolean(url.host);
+    } catch (error) {
+        return false;
+    }
+}
+
+function getBrowserApiBaseUrl() {
+    return normalizeApiBaseUrl(window.location.origin || 'http://localhost:8000');
+}
+
+function resolveApiBaseUrl(settings = {}) {
+    const configuredUrl = normalizeApiBaseUrl(settings.api_base_url);
+    return configuredUrl && isValidHttpApiBaseUrl(configuredUrl) ? configuredUrl : getBrowserApiBaseUrl();
+}
+
+function getApiUrl(path, baseUrl = apiDocsBaseUrl) {
+    const base = normalizeApiBaseUrl(baseUrl) || getBrowserApiBaseUrl();
+    const rawPath = String(path || '');
+    const normalizedPath = rawPath.startsWith('/') ? rawPath : `/${rawPath}`;
+    return `${base}${normalizedPath}`;
+}
+
+async function fetchApiDocsBaseUrl() {
+    try {
+        const response = await fetch('/admin/settings', { headers });
+        if (response.ok) {
+            const settings = await response.json();
+            return resolveApiBaseUrl(settings);
+        }
+    } catch (error) {
+        console.warn('读取 API 基础地址失败，使用当前访问地址:', error);
+    }
+
+    return getBrowserApiBaseUrl();
 }
 
 function updateTranslatorMeta() {
@@ -912,6 +985,7 @@ async function loadModels() {
         if (!response.ok) throw new Error('获取模型状态失败');
 
         const status = await response.json();
+        window.modelManagementStatus = status;
         const configResponse = await fetch('/admin/models/config', { headers });
         const modelConfig = configResponse.ok
             ? await configResponse.json()
@@ -948,6 +1022,18 @@ async function loadModels() {
             }
             return '<span style="color: #f59e0b;">⚠ 未下载</span>';
         };
+        const causalLmDownloadStatus = (modelInfo) => {
+            if (!modelInfo) {
+                return '<span style="color: #f59e0b;">⚠ 状态未知</span>';
+            }
+            if (modelInfo.has_downloads) {
+                return `<span style="color: #10b981;">✓ 已下载</span><br><small style="color: #666;">${escapeHTML(modelInfo.downloaded_models?.[0] || modelInfo.model_name || '')}</small><br><small style="color: #64748b;">后端: ${escapeHTML(modelInfo.backend || 'transformers-causal-lm')}</small>`;
+            }
+            if (modelInfo.cache_incomplete) {
+                return '<span style="color: #f59e0b;">⚠ 缓存不完整</span><br><small style="color: #666;">已有部分文件，但缺少权重</small>';
+            }
+            return '<span style="color: #f59e0b;">⚠ 未下载</span>';
+        };
         const modelActionButton = (modelInfo, infoKey, downloadHandler, convertHandler) => {
             if (!modelInfo?.loaded) {
                 return `<button class="btn btn-sm" style="padding: 0.25rem 0.75rem; font-size: 0.875rem; background: #10b981; color: white; border: none; border-radius: 0.375rem; cursor: pointer;" onclick="${downloadHandler}(event)">下载/修复</button>`;
@@ -960,6 +1046,55 @@ async function loadModels() {
                 <button class="btn btn-sm" disabled style="padding: 0.25rem 0.75rem; font-size: 0.875rem; background: #dcfce7; color: #166534; border: none; border-radius: 0.375rem;">CT2 已优化</button>
             </div>`;
         };
+        const causalLmActionButton = (modelInfo, modelId) => {
+            if (!modelInfo?.loaded) {
+                return `<button class="btn btn-sm" style="padding: 0.25rem 0.75rem; font-size: 0.875rem; background: #10b981; color: white; border: none; border-radius: 0.375rem; cursor: pointer;" onclick="downloadCausalLMModel(event, '${modelId}')">下载/修复</button>`;
+            }
+            return `<div class="action-stack">
+                <button class="btn btn-sm" style="padding: 0.25rem 0.75rem; font-size: 0.875rem; background: #64748b; color: white; border: none; border-radius: 0.375rem; cursor: pointer;" onclick="showModelInfo('${modelId}')">详情</button>
+                <button class="btn btn-sm" disabled style="padding: 0.25rem 0.75rem; font-size: 0.875rem; background: #dcfce7; color: #166534; border: none; border-radius: 0.375rem;">已下载</button>
+            </div>`;
+        };
+        const causalLmRows = CAUSAL_LM_MODELS.map(model => {
+            const modelInfo = status[model.value];
+            const modelName = modelInfo?.model_name || model.modelName;
+            return `
+                        <tr>
+                            <td>
+                                <strong>${escapeHTML(model.label)}</strong>
+                                <br>
+                                <small style="color: #666;">${escapeHTML(modelName)}</small>
+                            </td>
+                            <td>大语言模型翻译</td>
+                            <td>${escapeHTML(modelInfo?.size || model.size)}</td>
+                            <td>${modelInfo?.loaded ? '<span class="badge badge-success">✓ 可用</span>' : '<span class="badge" style="background: #fef3c7; color: #92400e;">未下载</span>'}</td>
+                            <td>
+                                ${causalLmDownloadStatus(modelInfo)}
+                            </td>
+                            <td data-download-card>
+                                ${causalLmActionButton(modelInfo, model.value)}
+                            </td>
+                        </tr>
+            `;
+        }).join('');
+        const causalLmCards = CAUSAL_LM_MODELS.map(model => {
+            const modelInfo = status[model.value];
+            const modelName = modelInfo?.model_name || model.modelName;
+            const downloaded = Boolean(modelInfo?.has_downloads);
+            const authNote = modelInfo?.requires_auth ? '<br><small style="color: #92400e;">可能需要先在 HuggingFace 登录/授权</small>' : '';
+            return `
+                    <div data-download-card style="border: 1px solid var(--border-color); border-radius: 0.5rem; padding: 1.5rem;">
+                        <h4 style="margin-bottom: 0.5rem;">${escapeHTML(model.label)}</h4>
+                        <p style="color: #666; font-size: 0.9rem; margin-bottom: 1rem;">${escapeHTML(model.note)}</p>
+                        <div style="margin-bottom: 1rem;">
+                            <span style="background: #ede9fe; color: #5b21b6; padding: 0.25rem 0.5rem; border-radius: 0.25rem; font-size: 0.8rem;">${escapeHTML(model.badge)}</span>
+                            <span style="background: #fef3c7; color: #92400e; padding: 0.25rem 0.5rem; border-radius: 0.25rem; font-size: 0.8rem; margin-left: 0.5rem;">${escapeHTML(modelInfo?.size || model.size)}</span>
+                        </div>
+                        <p style="color: #666; font-size: 0.85rem; margin-bottom: 1rem;"><code>${escapeHTML(modelName)}</code>${authNote}</p>
+                        <button class="btn" ${downloaded ? 'disabled' : ''} style="width: 100%; padding: 0.5rem; background: ${downloaded ? '#dcfce7' : '#10b981'}; color: ${downloaded ? '#166534' : 'white'}; border: none; border-radius: 0.375rem; cursor: ${downloaded ? 'not-allowed' : 'pointer'};" onclick="downloadCausalLMModel(event, '${model.value}')">${downloaded ? '已下载' : '下载/修复'}</button>
+                    </div>
+            `;
+        }).join('');
         const m2m100LargeDownloadStatus = modelDownloadStatus(status.m2m100_1_2b);
         const nllbDownloadStatus = modelDownloadStatus(status.nllb);
 
@@ -1064,6 +1199,7 @@ async function loadModels() {
                                 ${modelActionButton(status.nllb, 'nllb', 'downloadNLLBModel', 'convertNLLBModelToCT2')}
                             </td>
                         </tr>
+                        ${causalLmRows}
                     </tbody>
                 </table>
             </div>
@@ -1086,6 +1222,8 @@ async function loadModels() {
                         </div>
                         <button class="btn" style="width: 100%; padding: 0.5rem; background: #10b981; color: white; border: none; border-radius: 0.375rem; cursor: pointer;" onclick="downloadNLLBModel(event)">下载/修复 NLLB</button>
                     </div>
+
+                    ${causalLmCards}
 
                     <!-- Opus-MT 系列 -->
                     <div data-download-card style="border: 1px solid var(--border-color); border-radius: 0.5rem; padding: 1.5rem;">
@@ -1165,6 +1303,9 @@ async function loadModels() {
                             <option value="m2m100" ${defaultModel === 'm2m100' ? 'selected' : ''}>M2M100 (多语言)</option>
                             <option value="m2m100_1_2b" ${defaultModel === 'm2m100_1_2b' ? 'selected' : ''}>M2M100 1.2B (高精度)</option>
                             <option value="nllb" ${defaultModel === 'nllb' ? 'selected' : ''}>NLLB-200 (多语言)</option>
+                            <option value="qwen3_1_7b" ${defaultModel === 'qwen3_1_7b' ? 'selected' : ''}>Qwen3 1.7B</option>
+                            <option value="gemma3_1b" ${defaultModel === 'gemma3_1b' ? 'selected' : ''}>Gemma 3 1B</option>
+                            <option value="qwen2_5_0_5b" ${defaultModel === 'qwen2_5_0_5b' ? 'selected' : ''}>Qwen2.5 0.5B</option>
                         </select>
                         <div class="field-hint">未显式指定模型的 API 请求会使用这里的默认模型</div>
                     </div>
@@ -1194,6 +1335,7 @@ async function loadModels() {
                     <li><strong>Argos:</strong> 适合快速翻译、离线使用</li>
                     <li><strong>MarianMT:</strong> 适合高质量双语翻译</li>
                     <li><strong>M2M100:</strong> 适合多语言互译、小语种</li>
+                    <li><strong>Qwen/Gemma:</strong> 适合通用文本翻译和更灵活的表达，但推理更慢、资源占用更高</li>
                 </ul>
 
                 <h4 style="margin-top: 2rem;">⚙️ 镜像加速</h4>
@@ -1843,6 +1985,58 @@ async function downloadNLLBModel(event) {
     }
 }
 
+// 下载/修复通用大语言模型
+async function downloadCausalLMModel(event, modelId) {
+    const modelConfig = CAUSAL_LM_MODELS.find(model => model.value === modelId);
+    const modelInfo = window.modelManagementStatus?.[modelId];
+    const label = modelConfig?.label || modelId;
+    const modelName = modelInfo?.model_name || modelConfig?.modelName || modelId;
+    const size = modelInfo?.size || modelConfig?.size || '1GB+';
+    const authLine = modelId === 'gemma3_1b'
+        ? '\n提示: Gemma 可能需要先在 HuggingFace 接受许可并配置访问令牌。'
+        : '';
+    const confirmed = confirm(
+        `确定要下载/修复 ${label} 吗？\n\n` +
+        `模型: ${modelName}\n` +
+        `大小: ${size}\n\n` +
+        `下载完成后会写入 HuggingFace 本地缓存，翻译时将只从本地加载。${authLine}`
+    );
+
+    if (!confirmed) return;
+
+    const button = event.currentTarget;
+    button.disabled = true;
+    button.textContent = '下载中...';
+    button.style.background = '#94a3b8';
+    button.style.color = 'white';
+
+    try {
+        const response = await fetch(`/admin/models/causal-lm/download?model_id=${encodeURIComponent(modelId)}`, {
+            method: 'POST',
+            headers
+        });
+        const result = await response.json();
+
+        if (!response.ok || !result.success || !result.task_id) {
+            throw new Error(result.detail || result.message || '下载失败');
+        }
+
+        await pollDownloadTask(result.task_id, {
+            title: `下载 ${label}`,
+            anchor: button,
+            onComplete: async () => {
+                await loadModels();
+            }
+        });
+    } catch (error) {
+        alert(`${label} 下载失败: ${error.message}`);
+        button.disabled = false;
+        button.textContent = '下载/修复';
+        button.style.background = '#10b981';
+        button.style.color = 'white';
+    }
+}
+
 // 转换 NLLB 模型为 CTranslate2
 async function convertNLLBModelToCT2(event) {
     const confirmed = confirm(
@@ -1914,6 +2108,34 @@ function showModelInfo(modelName) {
                    `- Meta 多语言翻译模型\n` +
                    `- 默认接入 distilled 版本，更适合本地部署\n` +
                    `- 可通过 NLLB_MODEL 环境变量切换到更大版本\n\n` +
+                   `运行时只从本地 HuggingFace 缓存加载。`;
+            break;
+        case 'qwen3_1_7b':
+            info = `模型: Qwen3 1.7B\n\n` +
+                   `默认仓库: Qwen/Qwen3-1.7B\n\n` +
+                   `特点:\n` +
+                   `- 通用大语言模型翻译\n` +
+                   `- 使用 Transformers CausalLM 本地推理\n` +
+                   `- 支持通过 QWEN3_MODEL 环境变量替换仓库\n\n` +
+                   `运行时只从本地 HuggingFace 缓存加载。`;
+            break;
+        case 'gemma3_1b':
+            info = `模型: Gemma 3 1B\n\n` +
+                   `默认仓库: google/gemma-3-1b-it\n\n` +
+                   `特点:\n` +
+                   `- Google Gemma 3 指令模型\n` +
+                   `- 使用 Transformers CausalLM 本地推理\n` +
+                   `- 可能需要先在 HuggingFace 接受许可并配置访问令牌\n` +
+                   `- 支持通过 GEMMA3_MODEL 环境变量替换仓库\n\n` +
+                   `运行时只从本地 HuggingFace 缓存加载。`;
+            break;
+        case 'qwen2_5_0_5b':
+            info = `模型: Qwen2.5 0.5B\n\n` +
+                   `默认仓库: Qwen/Qwen2.5-0.5B-Instruct\n\n` +
+                   `特点:\n` +
+                   `- 轻量指令模型，资源占用较低\n` +
+                   `- 使用 Transformers CausalLM 本地推理\n` +
+                   `- 支持通过 QWEN2_5_MODEL 环境变量替换仓库\n\n` +
                    `运行时只从本地 HuggingFace 缓存加载。`;
             break;
         default:
@@ -2043,6 +2265,8 @@ async function loadSettings() {
         if (!response.ok) throw new Error('获取系统设置失败');
 
         const settings = await response.json();
+        const configuredApiBaseUrl = normalizeApiBaseUrl(settings.api_base_url || '');
+        const detectedApiBaseUrl = getBrowserApiBaseUrl();
 
         contentArea.innerHTML = `
         <div class="card">
@@ -2061,6 +2285,9 @@ async function loadSettings() {
                         <option value="m2m100" ${settings.default_model === 'm2m100' ? 'selected' : ''}>M2M100 (多语言)</option>
                         <option value="m2m100_1_2b" ${settings.default_model === 'm2m100_1_2b' ? 'selected' : ''}>M2M100 1.2B (高精度)</option>
                         <option value="nllb" ${settings.default_model === 'nllb' ? 'selected' : ''}>NLLB-200 (多语言)</option>
+                        <option value="qwen3_1_7b" ${settings.default_model === 'qwen3_1_7b' ? 'selected' : ''}>Qwen3 1.7B</option>
+                        <option value="gemma3_1b" ${settings.default_model === 'gemma3_1b' ? 'selected' : ''}>Gemma 3 1B</option>
+                        <option value="qwen2_5_0_5b" ${settings.default_model === 'qwen2_5_0_5b' ? 'selected' : ''}>Qwen2.5 0.5B</option>
                     </select>
                 </div>
 
@@ -2080,6 +2307,17 @@ async function loadSettings() {
                     <label style="display: block; margin-bottom: 0.5rem; font-weight: 500;">Token 过期时间（分钟）</label>
                     <input type="number" id="settings-token-expire" class="form-control" value="${settings.token_expire_minutes || 30}" min="1"
                            style="width: 100%; padding: 0.5rem; border: 2px solid var(--border-color); border-radius: 0.5rem;">
+                </div>
+
+                <div class="form-group" style="margin-bottom: 1.5rem;">
+                    <label style="display: block; margin-bottom: 0.5rem; font-weight: 500;">API 基础地址</label>
+                    <input type="url" id="settings-api-base-url" class="form-control"
+                           value="${escapeHTML(configuredApiBaseUrl)}"
+                           placeholder="${escapeHTML(detectedApiBaseUrl)}"
+                           style="width: 100%; padding: 0.5rem; border: 2px solid var(--border-color); border-radius: 0.5rem;">
+                    <p style="margin-top: 0.5rem; color: #64748b; font-size: 0.875rem;">
+                        留空时 API 文档会自动使用当前访问地址：<code>${escapeHTML(detectedApiBaseUrl)}</code>
+                    </p>
                 </div>
 
                 <button class="btn btn-primary" onclick="saveSettings()" style="padding: 0.625rem 1.25rem; background: var(--primary-color); color: white; border: none; border-radius: 0.5rem; cursor: pointer;">
@@ -2156,11 +2394,18 @@ async function saveSettings() {
     const rateLimit = parseInt(document.getElementById('settings-rate-limit')?.value, 10) || 100;
     const rateLimitPeriod = parseInt(document.getElementById('settings-rate-limit-period')?.value, 10) || 3600;
     const tokenExpire = parseInt(document.getElementById('settings-token-expire')?.value, 10) || 30;
+    const apiBaseUrl = normalizeApiBaseUrl(document.getElementById('settings-api-base-url')?.value || '');
+
+    if (apiBaseUrl && !isValidHttpApiBaseUrl(apiBaseUrl)) {
+        alert('❌ API 基础地址必须是有效的 http:// 或 https:// 地址');
+        return;
+    }
 
     const confirmMsg = `确定保存以下设置吗？\n\n` +
                        `默认模型: ${defaultModel}\n` +
                        `速率限制: ${rateLimit} 请求/${rateLimitPeriod} 秒\n` +
                        `Token 过期: ${tokenExpire} 分钟\n\n` +
+                       `API 基础地址: ${apiBaseUrl || `自动读取（${getBrowserApiBaseUrl()}）`}\n\n` +
                        `这些设置会立即保存到系统配置`;
 
     if (!confirm(confirmMsg)) return;
@@ -2173,7 +2418,8 @@ async function saveSettings() {
                 default_model: defaultModel,
                 api_rate_limit: rateLimit,
                 api_rate_limit_period: rateLimitPeriod,
-                token_expire_minutes: tokenExpire
+                token_expire_minutes: tokenExpire,
+                api_base_url: apiBaseUrl
             })
         });
         const result = await response.json();
@@ -2240,7 +2486,13 @@ async function changePassword() {
 }
 
 // API 文档
-function loadDocs() {
+async function loadDocs() {
+    apiDocsBaseUrl = await fetchApiDocsBaseUrl();
+    const apiBaseUrl = apiDocsBaseUrl;
+    const docsUrl = getApiUrl('/docs', apiBaseUrl);
+    const openApiUrl = getApiUrl('/openapi.json', apiBaseUrl);
+    const translateUrl = getApiUrl('/translate', apiBaseUrl);
+
     document.getElementById('content-area').innerHTML = `
         <div class="card">
             <div class="card-header" style="padding: 0; margin-bottom: 1rem;">
@@ -2251,7 +2503,10 @@ function loadDocs() {
                 </button>
             </div>
             <p style="color: #475569; margin-top: 0.75rem;">
-                客户端只需要调用公开翻译接口；管理员先在后台创建 API Key，再交给客户端使用。完整 Swagger 文档可访问 <code>/docs</code>，OpenAPI JSON 为 <code>/openapi.json</code>。
+                客户端只需要调用公开翻译接口；管理员先在后台创建 API Key，再交给客户端使用。完整 Swagger 文档可访问 <code>${escapeHTML(docsUrl)}</code>，OpenAPI JSON 为 <code>${escapeHTML(openApiUrl)}</code>。
+            </p>
+            <p style="color: #475569; margin-top: 0.75rem;">
+                当前示例基础地址：<code>${escapeHTML(apiBaseUrl)}</code>
             </p>
 
             <h4 style="margin-top: 2rem;">1. 调用流程</h4>
@@ -2264,13 +2519,13 @@ function loadDocs() {
             </ol>
 
             <h4 style="margin-top: 2rem;">2. 公共翻译接口</h4>
-            <p><strong>端点:</strong> <code>POST /translate</code></p>
+            <p><strong>端点:</strong> <code>POST ${escapeHTML(translateUrl)}</code></p>
             <p><strong>认证:</strong> API Key，请求头 <code>X-API-Key: sk_xxx</code></p>
             <p><strong>Content-Type:</strong> <code>application/json</code></p>
 
             <h5>请求示例:</h5>
             <pre style="background: var(--bg-color); padding: 1rem; border-radius: 0.5rem; overflow-x: auto;">
-curl -X POST "http://localhost:8000/translate" \\
+curl -X POST "${escapeHTML(translateUrl)}" \\
   -H "Content-Type: application/json" \\
   -H "X-API-Key: sk_your_api_key" \\
   -d '{
@@ -2335,6 +2590,9 @@ curl -X POST "http://localhost:8000/translate" \\
                     <tr><td><code>m2m100</code></td><td>facebook/m2m100_418M</td><td>需下载标准 M2M100 模型；可转换 CTranslate2 int8 后由 <code>M2M100_BACKEND=auto</code> 优先调用。</td></tr>
                     <tr><td><code>m2m100_1_2b</code></td><td>facebook/m2m100_1.2B</td><td>需下载 1.2B 模型；可转换 CTranslate2，但转换和本地推理资源占用更高。</td></tr>
                     <tr><td><code>nllb</code></td><td>facebook/nllb-200-distilled-600M</td><td>需下载 NLLB 模型；可转换 CTranslate2 int8 后由 <code>NLLB_BACKEND=auto</code> 优先调用。</td></tr>
+                    <tr><td><code>qwen3_1_7b</code></td><td>Qwen/Qwen3-1.7B</td><td>通用大语言模型翻译，需先在“模型管理”下载；使用 Transformers CausalLM 本地推理。</td></tr>
+                    <tr><td><code>gemma3_1b</code></td><td>google/gemma-3-1b-it</td><td>Gemma 3 指令模型，可能需要 HuggingFace 授权；使用 Transformers CausalLM 本地推理。</td></tr>
+                    <tr><td><code>qwen2_5_0_5b</code></td><td>Qwen/Qwen2.5-0.5B-Instruct</td><td>轻量通用大语言模型翻译，需先在“模型管理”下载。</td></tr>
                 </tbody>
             </table>
 
@@ -2373,6 +2631,7 @@ curl -X POST "http://localhost:8000/translate" \\
                     <tr><td><code>POST /admin/models/m2m100/convert-ct2</code></td><td>Bearer JWT</td><td>将已下载 M2M100 标准模型转换为 CTranslate2 本地模型。</td></tr>
                     <tr><td><code>POST /admin/models/m2m100-large/convert-ct2</code></td><td>Bearer JWT</td><td>将已下载 M2M100 1.2B 模型转换为 CTranslate2 本地模型。</td></tr>
                     <tr><td><code>POST /admin/models/nllb/convert-ct2</code></td><td>Bearer JWT</td><td>将已下载 NLLB 模型转换为 CTranslate2 本地模型。</td></tr>
+                    <tr><td><code>POST /admin/models/causal-lm/download?model_id=...</code></td><td>Bearer JWT</td><td>下载 Qwen/Gemma 通用大语言模型翻译后端。</td></tr>
                 </tbody>
             </table>
 
@@ -2397,14 +2656,21 @@ curl -X POST "http://localhost:8000/translate" \\
     `;
 }
 
-function getAPIDocsMarkdown() {
+function getAPIDocsMarkdown(baseUrl = apiDocsBaseUrl) {
+    const resolvedBaseUrl = normalizeApiBaseUrl(baseUrl) || getBrowserApiBaseUrl();
+    const docsUrl = getApiUrl('/docs', resolvedBaseUrl);
+    const openApiUrl = getApiUrl('/openapi.json', resolvedBaseUrl);
+    const translateUrl = getApiUrl('/translate', resolvedBaseUrl);
+
     return `# API 接口文档
 
 客户端只需要调用公开翻译接口；管理员先在后台创建 API Key，再交给客户端使用。
 
-完整 Swagger 文档：\`/docs\`
+完整 Swagger 文档：\`${docsUrl}\`
 
-OpenAPI JSON：\`/openapi.json\`
+OpenAPI JSON：\`${openApiUrl}\`
+
+API 基础地址：\`${resolvedBaseUrl}\`
 
 ## 1. 调用流程
 
@@ -2416,7 +2682,7 @@ OpenAPI JSON：\`/openapi.json\`
 
 ## 2. 公共翻译接口
 
-**端点：** \`POST /translate\`
+**端点：** \`POST ${translateUrl}\`
 
 **认证：** API Key，请求头 \`X-API-Key: sk_xxx\`
 
@@ -2425,7 +2691,7 @@ OpenAPI JSON：\`/openapi.json\`
 ### 请求示例
 
 \`\`\`bash
-curl -X POST "http://localhost:8000/translate" \\
+curl -X POST "${translateUrl}" \\
   -H "Content-Type: application/json" \\
   -H "X-API-Key: sk_your_api_key" \\
   -d '{
@@ -2477,6 +2743,9 @@ curl -X POST "http://localhost:8000/translate" \\
 | \`m2m100\` | facebook/m2m100_418M | 需下载标准 M2M100 模型；可转换 CTranslate2 int8 后由 \`M2M100_BACKEND=auto\` 优先调用。 |
 | \`m2m100_1_2b\` | facebook/m2m100_1.2B | 需下载 1.2B 模型；可转换 CTranslate2，但转换和本地推理资源占用更高。 |
 | \`nllb\` | facebook/nllb-200-distilled-600M | 需下载 NLLB 模型；可转换 CTranslate2 int8 后由 \`NLLB_BACKEND=auto\` 优先调用。 |
+| \`qwen3_1_7b\` | Qwen/Qwen3-1.7B | 通用大语言模型翻译，需先在“模型管理”下载；使用 Transformers CausalLM 本地推理。 |
+| \`gemma3_1b\` | google/gemma-3-1b-it | Gemma 3 指令模型，可能需要 HuggingFace 授权；使用 Transformers CausalLM 本地推理。 |
+| \`qwen2_5_0_5b\` | Qwen/Qwen2.5-0.5B-Instruct | 轻量通用大语言模型翻译，需先在“模型管理”下载。 |
 
 ## 4. 支持的语言代码
 
@@ -2509,6 +2778,7 @@ curl -X POST "http://localhost:8000/translate" \\
 | \`POST /admin/models/m2m100/convert-ct2\` | Bearer JWT | 将已下载 M2M100 标准模型转换为 CTranslate2 本地模型。 |
 | \`POST /admin/models/m2m100-large/convert-ct2\` | Bearer JWT | 将已下载 M2M100 1.2B 模型转换为 CTranslate2 本地模型。 |
 | \`POST /admin/models/nllb/convert-ct2\` | Bearer JWT | 将已下载 NLLB 模型转换为 CTranslate2 本地模型。 |
+| \`POST /admin/models/causal-lm/download?model_id=...\` | Bearer JWT | 下载 Qwen/Gemma 通用大语言模型翻译后端。 |
 
 ## 6. 速率限制
 
@@ -2534,7 +2804,7 @@ curl -X POST "http://localhost:8000/translate" \\
 `;
 }
 
-function downloadAPIDocs(format = 'md') {
+async function downloadAPIDocs(format = 'md') {
     const normalizedFormat = String(format || 'md').toLowerCase();
 
     if (normalizedFormat !== 'md') {
@@ -2542,7 +2812,8 @@ function downloadAPIDocs(format = 'md') {
         return;
     }
 
-    const content = getAPIDocsMarkdown();
+    apiDocsBaseUrl = await fetchApiDocsBaseUrl();
+    const content = getAPIDocsMarkdown(apiDocsBaseUrl);
     const blob = new Blob([content], { type: 'text/markdown;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');

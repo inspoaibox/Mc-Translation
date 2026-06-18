@@ -31,8 +31,12 @@ MODEL_SIZE_HINTS = {
     "facebook/nllb-200-distilled-600M": 2_500_000_000,
     "facebook/nllb-200-1.3B": 5_500_000_000,
     "facebook/nllb-200-3.3B": 13_000_000_000,
+    "Qwen/Qwen3-1.7B": 3_800_000_000,
+    "google/gemma-3-1b-it": 2_200_000_000,
+    "Qwen/Qwen2.5-0.5B-Instruct": 1_100_000_000,
 }
 DEFAULT_MARIAN_SIZE_HINT = 320_000_000
+DEFAULT_CAUSAL_LM_SIZE_HINT = 2_500_000_000
 MULTILINGUAL_UI_LANGS = ["zh", "en", "ja", "ko", "fr", "de", "es", "ru"]
 
 
@@ -114,6 +118,12 @@ def create_download_task(kind: str, label: str) -> str:
             "finished_at": None,
         }
     return task_id
+
+def get_causal_lm_model_info(model_id: str) -> dict:
+    model_info = config.CAUSAL_LM_MODELS.get(model_id)
+    if not model_info:
+        raise HTTPException(status_code=400, detail=f"不支持的大模型: {model_id}")
+    return model_info
 
 def update_download_task(task_id: str, **updates):
     with download_tasks_lock:
@@ -382,6 +392,29 @@ async def get_models_status(current_user=Depends(require_admin_user)):
         model for model in m2m100_large_models
         if has_ct2_model_files(model)
     ]
+    causal_lm_status = {}
+    for model_id, model_info in config.CAUSAL_LM_MODELS.items():
+        model_name = model_info["model_name"]
+        downloaded_models = [
+            m for m in huggingface_models
+            if m == model_name and has_huggingface_model_files(m)
+        ]
+        cached_models = [m for m in huggingface_models if m == model_name]
+        downloaded = len(downloaded_models) > 0
+        causal_lm_status[model_id] = {
+            "loaded": transformers_available and downloaded,
+            "type": "causal_lm",
+            "size": model_info.get("size", "1GB+"),
+            "display_name": model_info.get("display_name", model_id),
+            "model_name": model_name,
+            "downloaded_models": downloaded_models,
+            "cached_models": cached_models,
+            "backend": "transformers-causal-lm",
+            "requires_auth": bool(model_info.get("requires_auth")),
+            "cache_incomplete": len(cached_models) > len(downloaded_models),
+            "ready_pairs": sorted(build_all_language_pairs(MULTILINGUAL_UI_LANGS)) if downloaded else [],
+            "has_downloads": downloaded,
+        }
 
     return {
         "argos": {
@@ -443,7 +476,8 @@ async def get_models_status(current_user=Depends(require_admin_user)):
             "cache_incomplete": len(nllb_cache_models) > len(nllb_models),
             "ready_pairs": sorted(nllb_ready_pairs),
             "has_downloads": nllb_downloaded
-        }
+        },
+        **causal_lm_status,
     }
 
 @router.get("/admin/models/marian/available")
@@ -960,6 +994,57 @@ def convert_nllb_model_to_ct2_task(task_id: str, model_name: str):
                 os.replace(backup_dir, output_dir)
         except Exception:
             pass
+        fail_download_task(task_id, str(e))
+
+@router.post("/admin/models/causal-lm/download")
+async def download_causal_lm_model(
+    model_id: str,
+    current_user=Depends(require_admin_user)
+):
+    """下载通用大语言模型翻译后端。"""
+    model_info = get_causal_lm_model_info(model_id)
+    model_name = model_info["model_name"]
+    task_id = create_download_task(model_id, model_name)
+    run_threaded_download(download_causal_lm_model_task, task_id, model_id, model_name)
+
+    return {
+        "success": True,
+        "task_id": task_id,
+        "message": f"模型 {model_name} 下载任务已开始"
+    }
+
+def download_causal_lm_model_task(task_id: str, model_id: str, model_name: str):
+    stop_event = Event()
+    monitor = Thread(
+        target=monitor_huggingface_cache,
+        args=(
+            task_id,
+            model_name,
+            10,
+            95,
+            MODEL_SIZE_HINTS.get(model_name, DEFAULT_CAUSAL_LM_SIZE_HINT),
+            stop_event,
+        ),
+        daemon=True
+    )
+
+    try:
+        from huggingface_hub import snapshot_download
+
+        update_download_task(task_id, status="running", percent=5, message="准备下载大语言模型...")
+        monitor.start()
+
+        update_download_task(task_id, percent=10, message=f"下载 HuggingFace 仓库: {model_name}")
+        snapshot_download(repo_id=model_name)
+
+        stop_event.set()
+        if not has_huggingface_model_files(model_name):
+            raise RuntimeError("模型下载结束，但未检测到完整权重文件")
+
+        finish_download_task(task_id, f"模型 {model_name} 下载完成")
+
+    except Exception as e:
+        stop_event.set()
         fail_download_task(task_id, str(e))
 
 @router.get("/admin/models/argos/packages")

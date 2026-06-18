@@ -28,9 +28,19 @@ class Config:
     API_DESCRIPTION = "整合 Argos、MarianMT、M2M100、NLLB 的安全本地翻译服务"
     API_RATE_LIMIT = 100
     API_RATE_LIMIT_PERIOD = 3600
+    API_BASE_URL = os.getenv("API_BASE_URL", "").strip().rstrip("/")
 
     # 模型配置
-    AVAILABLE_MODELS = ["argos", "marian", "m2m100", "m2m100_1_2b", "nllb"]
+    AVAILABLE_MODELS = [
+        "argos",
+        "marian",
+        "m2m100",
+        "m2m100_1_2b",
+        "nllb",
+        "qwen3_1_7b",
+        "gemma3_1b",
+        "qwen2_5_0_5b",
+    ]
     DEFAULT_MODEL = os.getenv("DEFAULT_MODEL", "argos")
 
     # 支持的语言对
@@ -62,6 +72,24 @@ class Config:
             "zh-en": True,
             "en-ja": True,
             "ja-en": True,
+        },
+        "qwen3_1_7b": {
+            "en-zh": True,
+            "zh-en": True,
+            "en-ja": True,
+            "ja-en": True,
+        },
+        "gemma3_1b": {
+            "en-zh": True,
+            "zh-en": True,
+            "en-ja": True,
+            "ja-en": True,
+        },
+        "qwen2_5_0_5b": {
+            "en-zh": True,
+            "zh-en": True,
+            "en-ja": True,
+            "ja-en": True,
         }
     }
 
@@ -80,10 +108,37 @@ class Config:
     NLLB_MODEL = os.getenv("NLLB_MODEL", "facebook/nllb-200-distilled-600M")
     NLLB_BACKEND = os.getenv("NLLB_BACKEND", "auto").lower()
 
+    # 通用大语言模型翻译后端。默认使用指令/聊天模型，翻译时只从本地缓存加载。
+    QWEN3_MODEL = os.getenv("QWEN3_MODEL", "Qwen/Qwen3-1.7B")
+    GEMMA3_MODEL = os.getenv("GEMMA3_MODEL", "google/gemma-3-1b-it")
+    QWEN2_5_MODEL = os.getenv("QWEN2_5_MODEL", "Qwen/Qwen2.5-0.5B-Instruct")
+    CAUSAL_LM_MODELS = {
+        "qwen3_1_7b": {
+            "model_name": QWEN3_MODEL,
+            "display_name": "Qwen3 1.7B",
+            "size": "~3.5GB",
+            "requires_auth": False,
+        },
+        "gemma3_1b": {
+            "model_name": GEMMA3_MODEL,
+            "display_name": "Gemma 3 1B",
+            "size": "~2GB",
+            "requires_auth": True,
+        },
+        "qwen2_5_0_5b": {
+            "model_name": QWEN2_5_MODEL,
+            "display_name": "Qwen2.5 0.5B",
+            "size": "~1GB",
+            "requires_auth": False,
+        },
+    }
+
     # 设备配置
     DEVICE = os.getenv("DEVICE", "cpu")
     TRANSLATION_MAX_NEW_TOKENS = int(os.getenv("TRANSLATION_MAX_NEW_TOKENS", "128"))
     TRANSLATION_BATCH_SIZE = int(os.getenv("TRANSLATION_BATCH_SIZE", "8"))
+    LLM_MAX_INPUT_TOKENS = int(os.getenv("LLM_MAX_INPUT_TOKENS", "1024"))
+    LLM_TRANSLATION_MAX_NEW_TOKENS = int(os.getenv("LLM_TRANSLATION_MAX_NEW_TOKENS", "512"))
     TORCH_CPU_THREADS = int(os.getenv("TORCH_CPU_THREADS", "0"))
     MODEL_WARMUP_ENABLED = os.getenv("MODEL_WARMUP_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
     TRANSFORMER_WARMUP_MODELS = [

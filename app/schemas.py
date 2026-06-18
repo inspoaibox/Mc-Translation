@@ -101,6 +101,7 @@ class AdminSettings(BaseModel):
     api_rate_limit: int = Field(..., ge=1)
     api_rate_limit_period: int = Field(..., ge=1)
     token_expire_minutes: int = Field(..., ge=1)
+    api_base_url: Optional[str] = Field("", max_length=500)
 
 class PasswordChangeRequest(BaseModel):
     current_password: str = Field(..., min_length=1)

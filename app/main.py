@@ -10,6 +10,7 @@ from fastapi.responses import HTMLResponse
 from starlette.concurrency import run_in_threadpool
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
+from urllib.parse import urlparse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, and_
 from threading import Thread
@@ -25,7 +26,7 @@ from .schemas import (
     TranslationStats, SystemStatus,
     AdminSettings, PasswordChangeRequest
 )
-from .models import ArgosTranslator, MarianTranslator, M2M100Translator, NLLBTranslator
+from .models import ArgosTranslator, MarianTranslator, M2M100Translator, NLLBTranslator, CausalLMTranslator
 from .models.metrics import TranslationMetrics, TranslationResult
 from .database import User, APIKey, TranslationLog, SystemConfig
 from .db_session import get_db, init_db
@@ -113,6 +114,7 @@ async def lifespan(app: FastAPI):
             "api_rate_limit",
             "api_rate_limit_period",
             "access_token_expire_minutes",
+            "api_base_url",
         ])))
         saved_config = {item.key: item.value for item in config_result.scalars().all()}
 
@@ -140,6 +142,9 @@ async def lifespan(app: FastAPI):
             except ValueError:
                 pass
 
+        if "api_base_url" in saved_config:
+            config.API_BASE_URL = saved_config["api_base_url"].strip().rstrip("/")
+
     print("正在初始化翻译器...")
     if config.DEVICE == "cpu" and config.TORCH_CPU_THREADS > 0:
         torch.set_num_threads(config.TORCH_CPU_THREADS)
@@ -156,6 +161,12 @@ async def lifespan(app: FastAPI):
         model_name=config.NLLB_MODEL,
         device=config.DEVICE
     )
+    for model_id, model_info in config.CAUSAL_LM_MODELS.items():
+        translators[model_id] = CausalLMTranslator(
+            model_id=model_id,
+            model_name=model_info["model_name"],
+            device=config.DEVICE,
+        )
 
     if config.MODEL_WARMUP_ENABLED:
         Thread(
@@ -519,6 +530,7 @@ async def get_admin_settings(
         "api_rate_limit": config.API_RATE_LIMIT,
         "api_rate_limit_period": config.API_RATE_LIMIT_PERIOD,
         "token_expire_minutes": config.ACCESS_TOKEN_EXPIRE_MINUTES,
+        "api_base_url": config.API_BASE_URL,
         "device": config.DEVICE,
         "version": config.API_VERSION,
         "database": "SQLite",
@@ -546,6 +558,11 @@ async def save_admin_settings(
     if settings.default_model not in config.AVAILABLE_MODELS:
         raise HTTPException(status_code=400, detail=f"不支持的默认模型: {settings.default_model}")
 
+    api_base_url = (settings.api_base_url or "").strip().rstrip("/")
+    parsed_api_base_url = urlparse(api_base_url)
+    if api_base_url and (parsed_api_base_url.scheme not in {"http", "https"} or not parsed_api_base_url.netloc):
+        raise HTTPException(status_code=400, detail="API 基础地址必须是有效的 http:// 或 https:// 地址")
+
     await upsert_system_config(db, "default_model", settings.default_model, "Default translation model")
     await upsert_system_config(db, "api_rate_limit", str(settings.api_rate_limit), "Default API key rate limit per period")
     await upsert_system_config(
@@ -560,12 +577,15 @@ async def save_admin_settings(
         str(settings.token_expire_minutes),
         "Admin JWT expiry in minutes"
     )
+    await upsert_system_config(db, "api_base_url", api_base_url, "Public API base URL for generated docs")
     await db.commit()
 
     config.DEFAULT_MODEL = settings.default_model
     config.API_RATE_LIMIT = settings.api_rate_limit
     config.API_RATE_LIMIT_PERIOD = settings.api_rate_limit_period
     config.ACCESS_TOKEN_EXPIRE_MINUTES = settings.token_expire_minutes
+    config.API_BASE_URL = api_base_url
+    settings.api_base_url = api_base_url
 
     return {
         "success": True,

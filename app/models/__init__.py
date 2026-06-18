@@ -5,5 +5,12 @@ from .argos import ArgosTranslator
 from .marian import MarianTranslator
 from .m2m100 import M2M100Translator
 from .nllb import NLLBTranslator
+from .causal_lm import CausalLMTranslator
 
-__all__ = ["ArgosTranslator", "MarianTranslator", "M2M100Translator", "NLLBTranslator"]
+__all__ = [
+    "ArgosTranslator",
+    "MarianTranslator",
+    "M2M100Translator",
+    "NLLBTranslator",
+    "CausalLMTranslator",
+]
