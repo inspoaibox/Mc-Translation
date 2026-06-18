@@ -203,7 +203,6 @@ your-domain.com {
     reverse_proxy 127.0.0.1:8000 {
         header_up Host {host}
         header_up X-Real-IP {remote_host}
-        header_up X-Forwarded-Proto {scheme}
     }
 
     log {
@@ -216,6 +215,8 @@ your-domain.com {
 启动或重载：
 
 ```bash
+sudo mkdir -p /var/log/caddy
+sudo chown -R caddy:caddy /var/log/caddy
 sudo caddy validate --config /etc/caddy/Caddyfile
 sudo systemctl reload caddy
 ```
@@ -226,13 +227,69 @@ sudo systemctl reload caddy
 uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
+如果访问域名出现 `502`，优先检查后端是否已经监听本机 `8000`：
+
+```bash
+curl http://127.0.0.1:8000/health
+ss -ltnp | grep :8000
+```
+
 访问地址：
 
 - 管理后台：`https://your-domain.com/admin/login`
 - API 文档：`https://your-domain.com/docs`
 - 翻译接口：`https://your-domain.com/translate`
 
-### 方案 3: 使用 Docker
+### 方案 3: 使用 PM2 守护后端
+
+PM2 适合已经用 Caddy/Nginx 做反向代理，只需要把 Python 后端稳定跑在本机 `127.0.0.1:8000` 的场景。
+
+安装 PM2：
+
+```bash
+sudo apt update
+sudo apt install -y nodejs npm
+sudo npm install -g pm2
+```
+
+在项目目录启动服务：
+
+```bash
+cd ~/Mc-Translation
+source venv/bin/activate
+pm2 start "venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000" --name mc-translation
+```
+
+检查服务：
+
+```bash
+pm2 status
+pm2 logs mc-translation
+curl http://127.0.0.1:8000/health
+```
+
+保存进程列表并设置开机自启动：
+
+```bash
+pm2 save
+pm2 startup systemd -u root --hp /root
+```
+
+`pm2 startup` 会输出一条 `sudo env PATH=... pm2 startup ...` 命令，把它复制执行一次，然后再保存：
+
+```bash
+pm2 save
+systemctl status pm2-root
+```
+
+更新代码或环境变量后重启：
+
+```bash
+pm2 restart mc-translation --update-env
+pm2 save
+```
+
+### 方案 4: 使用 Docker
 
 创建 `Dockerfile`:
 
@@ -258,7 +315,7 @@ docker run -d -p 8000:8000 --name translation-api \
   translation-api
 ```
 
-### 方案 4: 使用 Systemd 服务
+### 方案 5: 使用 Systemd 服务
 
 创建 `/etc/systemd/system/translation-api.service`:
 

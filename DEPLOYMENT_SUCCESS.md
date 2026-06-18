@@ -190,7 +190,25 @@ console.log(result.translated_text);
 3. 配置 SSL 证书
 4. 设置为系统服务
 
-### 方案 3: 使用 Docker
+### 方案 3: 使用 PM2
+
+```bash
+cd ~/Mc-Translation
+source venv/bin/activate
+pm2 start "venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000" --name mc-translation
+pm2 save
+pm2 startup systemd -u root --hp /root
+```
+
+执行 `pm2 startup` 输出的 `sudo env PATH=...` 命令后，再运行：
+
+```bash
+pm2 save
+systemctl status pm2-root
+curl http://127.0.0.1:8000/health
+```
+
+### 方案 4: 使用 Docker
 
 ```bash
 # 构建镜像
@@ -203,7 +221,7 @@ docker run -d -p 8000:8000 \
   translation-api
 ```
 
-### 方案 4: 使用 Systemd
+### 方案 5: 使用 Systemd
 
 详见 README.md 中的完整步骤
 
@@ -229,6 +247,9 @@ sudo journalctl -u translation-api -f
 
 # 如果使用 Docker
 docker logs -f translation-api
+
+# 如果使用 PM2
+pm2 logs mc-translation
 
 # 直接运行
 # 查看终端输出
