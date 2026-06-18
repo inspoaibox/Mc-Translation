@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>管理后台 - 翻译API</title>
+    <link rel="stylesheet" href="/static/css/admin.css">
+</head>
+<body>
+    <div class="admin-layout">
+        <!-- 侧边栏 -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <h2>🌐 翻译 API</h2>
+                <p class="version">v2.0.0</p>
+            </div>
+
+            <nav class="sidebar-nav">
+                <a href="#dashboard" class="nav-item active" data-page="dashboard">
+                    <span class="icon">📊</span> 仪表盘
+                </a>
+                <a href="#api-keys" class="nav-item" data-page="api-keys">
+                    <span class="icon">🔑</span> API 密钥
+                </a>
+                <a href="#models" class="nav-item" data-page="models">
+                    <span class="icon">🤖</span> 模型管理
+                </a>
+                <a href="#translator" class="nav-item" data-page="translator">
+                    <span class="icon">🔤</span> 在线翻译
+                </a>
+                <a href="#logs" class="nav-item" data-page="logs">
+                    <span class="icon">📝</span> 调用日志
+                </a>
+                <a href="#settings" class="nav-item" data-page="settings">
+                    <span class="icon">⚙️</span> 系统设置
+                </a>
+                <a href="#docs" class="nav-item" data-page="docs">
+                    <span class="icon">📖</span> API 文档
+                </a>
+            </nav>
+
+            <div class="sidebar-footer">
+                <button class="btn-logout" onclick="logout()">
+                    <span class="icon">🚪</span> 退出登录
+                </button>
+            </div>
+        </aside>
+
+        <!-- 主内容区 -->
+        <main class="main-content">
+            <header class="content-header">
+                <h1 id="page-title">仪表盘</h1>
+                <div class="user-info">
+                    <span id="username">Admin</span>
+                </div>
+            </header>
+
+            <div id="content-area">
+                <!-- 动态内容将在这里加载 -->
+            </div>
+        </main>
+    </div>
+
+    <script src="/static/js/admin.js"></script>
+</body>
+</html>

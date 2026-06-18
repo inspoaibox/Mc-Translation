@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>管理员登录 - 翻译API</title>
+    <link rel="stylesheet" href="/static/css/admin.css">
+</head>
+<body>
+    <div class="login-container">
+        <div class="login-box">
+            <h1>🔐 管理员登录</h1>
+            <p class="subtitle">翻译 API 管理后台</p>
+
+            <div id="error-message" class="error-message" style="display: none;"></div>
+
+            <form id="login-form">
+                <div class="form-group">
+                    <label for="username">用户名</label>
+                    <input type="text" id="username" name="username" required
+                           placeholder="请输入用户名" autocomplete="username">
+                </div>
+
+                <div class="form-group">
+                    <label for="password">密码</label>
+                    <input type="password" id="password" name="password" required
+                           placeholder="请输入密码" autocomplete="current-password">
+                </div>
+
+                <button type="submit" class="btn-primary">登录</button>
+            </form>
+
+            <div class="login-footer">
+                <p class="hint">默认账号: admin / admin123</p>
+                <p class="hint">首次登录后请立即修改密码</p>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/js/login.js"></script>
+</body>
+</html>
