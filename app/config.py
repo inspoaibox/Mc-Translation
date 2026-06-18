@@ -74,6 +74,7 @@ class Config:
     # M2M100 模型路径
     M2M100_MODEL = os.getenv("M2M100_MODEL", "facebook/m2m100_418M")
     M2M100_LARGE_MODEL = os.getenv("M2M100_LARGE_MODEL", "facebook/m2m100_1.2B")
+    M2M100_BACKEND = os.getenv("M2M100_BACKEND", "auto").lower()
 
     # NLLB 模型路径。默认使用相对更适合本地部署的 distilled 版本。
     NLLB_MODEL = os.getenv("NLLB_MODEL", "facebook/nllb-200-distilled-600M")
@@ -97,6 +98,13 @@ class Config:
     MARIAN_BACKEND = os.getenv("MARIAN_BACKEND", "auto").lower()
     CTRANSLATE2_MODELS_DIR = os.getenv("CTRANSLATE2_MODELS_DIR", "./models/ctranslate2")
     MARIAN_CT2_COMPUTE_TYPE = os.getenv("MARIAN_CT2_COMPUTE_TYPE", "int8")
+    MARIAN_CT2_INTER_THREADS = int(os.getenv("MARIAN_CT2_INTER_THREADS", "1"))
+    MARIAN_CT2_INTRA_THREADS = int(os.getenv("MARIAN_CT2_INTRA_THREADS", "0"))
+    MARIAN_CT2_MAX_QUEUED_BATCHES = int(os.getenv("MARIAN_CT2_MAX_QUEUED_BATCHES", "0"))
+    M2M100_CT2_COMPUTE_TYPE = os.getenv("M2M100_CT2_COMPUTE_TYPE", "int8")
+    M2M100_CT2_INTER_THREADS = int(os.getenv("M2M100_CT2_INTER_THREADS", "1"))
+    M2M100_CT2_INTRA_THREADS = int(os.getenv("M2M100_CT2_INTRA_THREADS", "0"))
+    M2M100_CT2_MAX_QUEUED_BATCHES = int(os.getenv("M2M100_CT2_MAX_QUEUED_BATCHES", "0"))
 
     # 启动时预热的 Argos 语言对，避免首个客户请求承担初始化成本
     ARGOS_WARMUP_PAIRS = [

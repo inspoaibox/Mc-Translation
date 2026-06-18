@@ -843,12 +843,21 @@ async function loadModels() {
                 return '<span style="color: #f59e0b;">⚠ 状态未知</span>';
             }
             if (modelInfo.has_downloads) {
-                return `<span style="color: #10b981;">✓ 已下载</span><br><small style="color: #666;">${modelInfo.downloaded_models?.[0]?.split('/').pop() || ''}</small>`;
+                return `<span style="color: #10b981;">✓ 已下载</span><br><small style="color: #666;">${modelInfo.downloaded_models?.[0]?.split('/').pop() || ''}</small><br><small style="color: #0f766e;">CT2: ${modelInfo.ctranslate2_models?.length || 0} 个 · ${modelInfo.backend || 'auto'}</small>`;
             }
             if (modelInfo.cache_incomplete) {
                 return '<span style="color: #f59e0b;">⚠ 缓存不完整</span><br><small style="color: #666;">已有部分文件，但缺少权重</small>';
             }
             return '<span style="color: #f59e0b;">⚠ 未下载</span>';
+        };
+        const modelActionButton = (modelInfo, infoKey, downloadHandler, convertHandler) => {
+            if (!modelInfo?.loaded) {
+                return `<button class="btn btn-sm" style="padding: 0.25rem 0.75rem; font-size: 0.875rem; background: #10b981; color: white; border: none; border-radius: 0.375rem; cursor: pointer;" onclick="${downloadHandler}(event)">下载/修复</button>`;
+            }
+            if ((modelInfo.ctranslate2_models?.length || 0) === 0) {
+                return `<button class="btn btn-sm" style="padding: 0.25rem 0.75rem; font-size: 0.875rem; background: #0f766e; color: white; border: none; border-radius: 0.375rem; cursor: pointer;" onclick="${convertHandler}(event)">转换 CT2</button>`;
+            }
+            return `<button class="btn btn-sm" style="padding: 0.25rem 0.75rem; font-size: 0.875rem; background: #64748b; color: white; border: none; border-radius: 0.375rem; cursor: pointer;" onclick="showModelInfo('${infoKey}')">详情</button>`;
         };
         const m2m100LargeDownloadStatus = modelDownloadStatus(status.m2m100_1_2b);
         const nllbDownloadStatus = modelDownloadStatus(status.nllb);
@@ -919,9 +928,7 @@ async function loadModels() {
                                 ${m2m100DownloadStatus}
                             </td>
                             <td data-download-card>
-                                ${status.m2m100.loaded
-                                    ? "<button class=\"btn btn-sm\" style=\"padding: 0.25rem 0.75rem; font-size: 0.875rem; background: #64748b; color: white; border: none; border-radius: 0.375rem; cursor: pointer;\" onclick=\"showModelInfo('m2m100')\">详情</button>"
-                                    : '<button class="btn btn-sm" style="padding: 0.25rem 0.75rem; font-size: 0.875rem; background: #10b981; color: white; border: none; border-radius: 0.375rem; cursor: pointer;" onclick="downloadM2M100Model(event)">下载/修复</button>'}
+                                ${modelActionButton(status.m2m100, 'm2m100', 'downloadM2M100Model', 'convertM2M100ModelToCT2')}
                             </td>
                         </tr>
                         <tr>
@@ -937,9 +944,7 @@ async function loadModels() {
                                 ${m2m100LargeDownloadStatus}
                             </td>
                             <td data-download-card>
-                                ${status.m2m100_1_2b?.loaded
-                                    ? "<button class=\"btn btn-sm\" style=\"padding: 0.25rem 0.75rem; font-size: 0.875rem; background: #64748b; color: white; border: none; border-radius: 0.375rem; cursor: pointer;\" onclick=\"showModelInfo('m2m100_1_2b')\">详情</button>"
-                                    : '<button class="btn btn-sm" style="padding: 0.25rem 0.75rem; font-size: 0.875rem; background: #10b981; color: white; border: none; border-radius: 0.375rem; cursor: pointer;" onclick="downloadM2M100LargeModel(event)">下载/修复</button>'}
+                                ${modelActionButton(status.m2m100_1_2b, 'm2m100_1_2b', 'downloadM2M100LargeModel', 'convertM2M100LargeModelToCT2')}
                             </td>
                         </tr>
                         <tr>
@@ -1512,6 +1517,55 @@ async function downloadM2M100Model(event) {
     }
 }
 
+// 转换 M2M100 标准模型为 CTranslate2
+async function convertM2M100ModelToCT2(event) {
+    await convertM2M100ModelToCT2Real(event, '/admin/models/m2m100/convert-ct2', 'M2M100 标准模型');
+}
+
+// 转换 M2M100 1.2B 模型为 CTranslate2
+async function convertM2M100LargeModelToCT2(event) {
+    await convertM2M100ModelToCT2Real(event, '/admin/models/m2m100-large/convert-ct2', 'M2M100 1.2B');
+}
+
+async function convertM2M100ModelToCT2Real(event, endpoint, label) {
+    const confirmed = confirm(
+        `确定要将 ${label} 转换为 CTranslate2 吗？\n\n` +
+        `转换会占用较多 CPU、内存和磁盘空间。完成后 M2M100_BACKEND=auto 会优先调用 CT2 本地模型。`
+    );
+
+    if (!confirmed) return;
+
+    const button = event.currentTarget;
+    button.disabled = true;
+    button.textContent = '转换中...';
+    button.style.background = '#94a3b8';
+
+    try {
+        const response = await fetch(endpoint, {
+            method: 'POST',
+            headers
+        });
+        const result = await response.json();
+
+        if (!response.ok || !result.success || !result.task_id) {
+            throw new Error(result.detail || result.message || '转换失败');
+        }
+
+        await pollDownloadTask(result.task_id, {
+            title: `转换 CT2 ${label}`,
+            anchor: button,
+            onComplete: async () => {
+                await loadModels();
+            }
+        });
+    } catch (error) {
+        alert(`${label} CT2 转换失败: ${error.message}`);
+        button.disabled = false;
+        button.textContent = '转换 CT2';
+        button.style.background = '#0f766e';
+    }
+}
+
 // 下载/修复 M2M100 1.2B 模型
 async function downloadM2M100LargeModel(event) {
     const confirmed = confirm(
@@ -2039,8 +2093,8 @@ curl -X POST "http://localhost:8000/translate" \\
                 <tbody>
                     <tr><td><code>argos</code></td><td>轻量级离线翻译</td><td>需安装对应 Argos 语言包。</td></tr>
                     <tr><td><code>marian</code></td><td>Helsinki-NLP Opus-MT</td><td>需下载对应语言对模型；可转换 CTranslate2 int8 后由 <code>MARIAN_BACKEND=auto</code> 优先调用。</td></tr>
-                    <tr><td><code>m2m100</code></td><td>facebook/m2m100_418M</td><td>需下载标准 M2M100 模型。</td></tr>
-                    <tr><td><code>m2m100_1_2b</code></td><td>facebook/m2m100_1.2B</td><td>需下载 1.2B 模型，本地推理更慢。</td></tr>
+                    <tr><td><code>m2m100</code></td><td>facebook/m2m100_418M</td><td>需下载标准 M2M100 模型；可转换 CTranslate2 int8 后由 <code>M2M100_BACKEND=auto</code> 优先调用。</td></tr>
+                    <tr><td><code>m2m100_1_2b</code></td><td>facebook/m2m100_1.2B</td><td>需下载 1.2B 模型；可转换 CTranslate2，但转换和本地推理资源占用更高。</td></tr>
                     <tr><td><code>nllb</code></td><td>facebook/nllb-200-distilled-600M</td><td>需下载 NLLB 模型；可通过 <code>NLLB_MODEL</code> 配置更大版本。</td></tr>
                 </tbody>
             </table>
@@ -2077,6 +2131,8 @@ curl -X POST "http://localhost:8000/translate" \\
                     <tr><td><code>GET /admin/models/status</code></td><td>Bearer JWT</td><td>查看模型、语言包、本地缓存完整性。</td></tr>
                     <tr><td><code>GET /admin/models/downloads/{task_id}</code></td><td>Bearer JWT</td><td>查询模型/语言包下载进度。</td></tr>
                     <tr><td><code>POST /admin/models/marian/convert-ct2</code></td><td>Bearer JWT</td><td>将已下载 MarianMT 转换为 CTranslate2 本地模型。</td></tr>
+                    <tr><td><code>POST /admin/models/m2m100/convert-ct2</code></td><td>Bearer JWT</td><td>将已下载 M2M100 标准模型转换为 CTranslate2 本地模型。</td></tr>
+                    <tr><td><code>POST /admin/models/m2m100-large/convert-ct2</code></td><td>Bearer JWT</td><td>将已下载 M2M100 1.2B 模型转换为 CTranslate2 本地模型。</td></tr>
                 </tbody>
             </table>
 

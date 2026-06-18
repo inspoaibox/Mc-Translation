@@ -37,6 +37,7 @@ class NLLBTranslator:
         self.tokenizer = None
         self.model = None
         self._load_lock = Lock()
+        self._tokenizer_lock = Lock()
 
     def _load_model(self):
         if self.model is not None:
@@ -81,7 +82,6 @@ class NLLBTranslator:
 
             src_lang = self._map_language_code(source_lang)
             tgt_lang = self._map_language_code(target_lang)
-            self.tokenizer.src_lang = src_lang
 
             forced_bos_token_id = self.tokenizer.convert_tokens_to_ids(tgt_lang)
             if forced_bos_token_id is None or forced_bos_token_id < 0:
@@ -93,13 +93,15 @@ class NLLBTranslator:
 
                 for chunk in batched(segments):
                     batch_start = time.perf_counter()
-                    inputs = self.tokenizer(
-                        chunk,
-                        return_tensors="pt",
-                        padding=True,
-                        truncation=True,
-                        max_length=512
-                    ).to(self.device)
+                    with self._tokenizer_lock:
+                        self.tokenizer.src_lang = src_lang
+                        inputs = self.tokenizer(
+                            chunk,
+                            return_tensors="pt",
+                            padding=True,
+                            truncation=True,
+                            max_length=512
+                        ).to(self.device)
 
                     with torch.inference_mode():
                         translated = self.model.generate(
@@ -120,12 +122,14 @@ class NLLBTranslator:
 
             def translate_segment(segment: str) -> Optional[str]:
                 segment_start = time.perf_counter()
-                inputs = self.tokenizer(
-                    segment,
-                    return_tensors="pt",
-                    truncation=True,
-                    max_length=512
-                ).to(self.device)
+                with self._tokenizer_lock:
+                    self.tokenizer.src_lang = src_lang
+                    inputs = self.tokenizer(
+                        segment,
+                        return_tensors="pt",
+                        truncation=True,
+                        max_length=512
+                    ).to(self.device)
 
                 with torch.inference_mode():
                     translated = self.model.generate(

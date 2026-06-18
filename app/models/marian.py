@@ -68,7 +68,10 @@ class MarianTranslator:
                 translator = ctranslate2.Translator(
                     model_dir,
                     device="cuda" if self.device == "cuda" else "cpu",
-                    compute_type=config.MARIAN_CT2_COMPUTE_TYPE
+                    compute_type=config.MARIAN_CT2_COMPUTE_TYPE,
+                    inter_threads=max(1, config.MARIAN_CT2_INTER_THREADS),
+                    intra_threads=max(0, config.MARIAN_CT2_INTRA_THREADS),
+                    max_queued_batches=config.MARIAN_CT2_MAX_QUEUED_BATCHES
                 )
                 self.ct2_models[model_name] = (tokenizer, translator)
                 return tokenizer, translator

@@ -9,6 +9,7 @@ import torch
 from .formatting import translate_preserving_line_format_batched
 from .generation import batched, generation_token_limit, model_load_kwargs
 from .metrics import TranslationMetrics, TranslationResult
+from .ct2_utils import get_ct2_model_dir, has_ct2_model_files
 
 class M2M100Translator:
     """M2M100 翻译器"""
@@ -30,7 +31,11 @@ class M2M100Translator:
         self.device = device
         self.tokenizer: Optional[M2M100Tokenizer] = None
         self.model: Optional[M2M100ForConditionalGeneration] = None
+        self.ct2_tokenizer: Optional[M2M100Tokenizer] = None
+        self.ct2_translator = None
         self._load_lock = Lock()
+        self._ct2_load_lock = Lock()
+        self._tokenizer_lock = Lock()
 
     def _load_model(self):
         """延迟加载模型"""
@@ -58,6 +63,41 @@ class M2M100Translator:
                 self.tokenizer = None
                 self.model = None
 
+    def _load_ct2_model(self):
+        """延迟加载已转换的 CTranslate2 M2M100 模型。"""
+        if self.ct2_translator is not None:
+            return
+
+        with self._ct2_load_lock:
+            if self.ct2_translator is not None:
+                return
+
+            try:
+                import ctranslate2
+                from ..config import config
+
+                model_dir = get_ct2_model_dir(self.model_name)
+                if not has_ct2_model_files(self.model_name):
+                    return
+
+                print(f"正在加载 M2M100 CTranslate2 模型: {model_dir}")
+                self.ct2_tokenizer = M2M100Tokenizer.from_pretrained(
+                    self.model_name,
+                    local_files_only=True
+                )
+                self.ct2_translator = ctranslate2.Translator(
+                    model_dir,
+                    device="cuda" if self.device == "cuda" else "cpu",
+                    compute_type=config.M2M100_CT2_COMPUTE_TYPE,
+                    inter_threads=max(1, config.M2M100_CT2_INTER_THREADS),
+                    intra_threads=max(0, config.M2M100_CT2_INTRA_THREADS),
+                    max_queued_batches=config.M2M100_CT2_MAX_QUEUED_BATCHES
+                )
+            except Exception as e:
+                print(f"加载 M2M100 CTranslate2 模型失败: {str(e)}")
+                self.ct2_tokenizer = None
+                self.ct2_translator = None
+
     def _map_language_code(self, lang: str) -> str:
         """映射语言代码到 M2M100 格式"""
         return self.LANG_CODE_MAP.get(lang, lang)
@@ -76,10 +116,100 @@ class M2M100Translator:
         """
         return self.translate_with_metrics(text, source_lang, target_lang).text
 
+    def _select_backend(self) -> str:
+        from ..config import config
+
+        backend = config.M2M100_BACKEND
+        if backend == "ctranslate2":
+            return "ctranslate2"
+        if backend == "transformers":
+            return "transformers"
+        if has_ct2_model_files(self.model_name):
+            return "ctranslate2"
+        return "transformers"
+
+    def _translate_with_ct2(self, text: str, source_lang: str, target_lang: str) -> TranslationResult:
+        metrics = TranslationMetrics(backend="ctranslate2", actual_model_name=self.model_name)
+
+        load_start = time.perf_counter()
+        self._load_ct2_model()
+        metrics.model_load_time = time.perf_counter() - load_start
+        if not self.ct2_tokenizer or not self.ct2_translator:
+            return TranslationResult(None, metrics)
+
+        src_lang = self._map_language_code(source_lang)
+        tgt_lang = self._map_language_code(target_lang)
+        target_lang_token = self.ct2_tokenizer.convert_ids_to_tokens(
+            self.ct2_tokenizer.get_lang_id(tgt_lang)
+        )
+
+        def encode_segment(segment: str) -> list[str]:
+            with self._tokenizer_lock:
+                self.ct2_tokenizer.src_lang = src_lang
+                token_ids = self.ct2_tokenizer.encode(
+                    segment,
+                    truncation=True,
+                    max_length=512
+                )
+            return self.ct2_tokenizer.convert_ids_to_tokens(token_ids)
+
+        def decode_tokens(tokens: list[str]) -> str:
+            if tokens and tokens[0] == target_lang_token:
+                tokens = tokens[1:]
+            token_ids = self.ct2_tokenizer.convert_tokens_to_ids(tokens)
+            return self.ct2_tokenizer.decode(token_ids, skip_special_tokens=True)
+
+        def translate_segments(segments: list[str]) -> Optional[list[str]]:
+            translated_texts = []
+
+            for chunk in batched(segments):
+                batch_start = time.perf_counter()
+                source_tokens = [encode_segment(item) for item in chunk]
+                max_input_length = max((len(item) for item in source_tokens), default=1)
+                target_prefix = [[target_lang_token] for _ in source_tokens]
+                results = self.ct2_translator.translate_batch(
+                    source_tokens,
+                    target_prefix=target_prefix,
+                    beam_size=1,
+                    max_batch_size=len(source_tokens),
+                    max_input_length=512,
+                    max_decoding_length=generation_token_limit(max_input_length)
+                )
+                translated_texts.extend(decode_tokens(result.hypotheses[0]) for result in results)
+                metrics.inference_time += time.perf_counter() - batch_start
+                metrics.segment_count += len(chunk)
+                metrics.batch_count += 1
+
+            return translated_texts
+
+        def translate_segment(segment: str) -> Optional[str]:
+            translated = translate_segments([segment])
+            return translated[0] if translated else None
+
+        format_start = time.perf_counter()
+        translated_text = translate_preserving_line_format_batched(text, translate_segments, translate_segment)
+        format_total = time.perf_counter() - format_start
+        metrics.format_time = max(0.0, format_total - metrics.inference_time)
+        return TranslationResult(translated_text, metrics)
+
     def translate_with_metrics(self, text: str, source_lang: str, target_lang: str) -> TranslationResult:
         metrics = TranslationMetrics(backend="transformers", actual_model_name=self.model_name)
 
         try:
+            backend = self._select_backend()
+            if backend == "ctranslate2":
+                try:
+                    return self._translate_with_ct2(text, source_lang, target_lang)
+                except Exception as e:
+                    print(f"M2M100 CTranslate2 翻译失败: {str(e)}")
+                    return TranslationResult(
+                        None,
+                        TranslationMetrics(
+                            backend="ctranslate2",
+                            actual_model_name=self.model_name
+                        )
+                    )
+
             # 确保模型已加载
             load_start = time.perf_counter()
             self._load_model()
@@ -91,9 +221,6 @@ class M2M100Translator:
             src_lang = self._map_language_code(source_lang)
             tgt_lang = self._map_language_code(target_lang)
 
-            # 设置源语言
-            self.tokenizer.src_lang = src_lang
-
             # 生成翻译（指定目标语言）
             forced_bos_token_id = self.tokenizer.get_lang_id(tgt_lang)
 
@@ -102,13 +229,15 @@ class M2M100Translator:
 
                 for chunk in batched(segments):
                     batch_start = time.perf_counter()
-                    inputs = self.tokenizer(
-                        chunk,
-                        return_tensors="pt",
-                        padding=True,
-                        truncation=True,
-                        max_length=512
-                    ).to(self.device)
+                    with self._tokenizer_lock:
+                        self.tokenizer.src_lang = src_lang
+                        inputs = self.tokenizer(
+                            chunk,
+                            return_tensors="pt",
+                            padding=True,
+                            truncation=True,
+                            max_length=512
+                        ).to(self.device)
 
                     with torch.inference_mode():
                         translated = self.model.generate(
@@ -129,12 +258,14 @@ class M2M100Translator:
 
             def translate_segment(segment: str) -> Optional[str]:
                 segment_start = time.perf_counter()
-                inputs = self.tokenizer(
-                    segment,
-                    return_tensors="pt",
-                    truncation=True,
-                    max_length=512
-                ).to(self.device)
+                with self._tokenizer_lock:
+                    self.tokenizer.src_lang = src_lang
+                    inputs = self.tokenizer(
+                        segment,
+                        return_tensors="pt",
+                        truncation=True,
+                        max_length=512
+                    ).to(self.device)
 
                 with torch.inference_mode():
                     translated = self.model.generate(

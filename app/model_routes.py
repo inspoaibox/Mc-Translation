@@ -12,6 +12,7 @@ from uuid import uuid4
 import importlib.util
 import os
 import re
+import shutil
 import time
 
 from .auth import get_current_user_from_token, security
@@ -347,6 +348,14 @@ async def get_models_status(current_user=Depends(require_admin_user)):
     m2m100_ready_pairs = build_all_language_pairs(MULTILINGUAL_UI_LANGS) if m2m100_downloaded else []
     m2m100_large_ready_pairs = build_all_language_pairs(MULTILINGUAL_UI_LANGS) if m2m100_large_downloaded else []
     nllb_ready_pairs = build_all_language_pairs(MULTILINGUAL_UI_LANGS) if nllb_downloaded else []
+    m2m100_ct2_models = [
+        model for model in m2m100_models
+        if has_ct2_model_files(model)
+    ]
+    m2m100_large_ct2_models = [
+        model for model in m2m100_large_models
+        if has_ct2_model_files(model)
+    ]
 
     return {
         "argos": {
@@ -376,6 +385,9 @@ async def get_models_status(current_user=Depends(require_admin_user)):
             "size": "1.2GB",
             "downloaded_models": m2m100_models,
             "cached_models": m2m100_cache_models,
+            "ctranslate2_available": ctranslate2_available,
+            "ctranslate2_models": m2m100_ct2_models,
+            "backend": config.M2M100_BACKEND,
             "cache_incomplete": len(m2m100_cache_models) > len(m2m100_models),
             "ready_pairs": sorted(m2m100_ready_pairs),
             "has_downloads": m2m100_downloaded
@@ -386,6 +398,9 @@ async def get_models_status(current_user=Depends(require_admin_user)):
             "size": "4.5GB",
             "downloaded_models": m2m100_large_models,
             "cached_models": m2m100_large_cache_models,
+            "ctranslate2_available": ctranslate2_available,
+            "ctranslate2_models": m2m100_large_ct2_models,
+            "backend": config.M2M100_BACKEND,
             "cache_incomplete": len(m2m100_large_cache_models) > len(m2m100_large_models),
             "ready_pairs": sorted(m2m100_large_ready_pairs),
             "has_downloads": m2m100_large_downloaded
@@ -584,7 +599,12 @@ def convert_marian_model_to_ct2_task(task_id: str, model_name: str):
             raise RuntimeError(f"未找到 {model_name} 的本地 HuggingFace snapshot")
 
         output_dir = get_ct2_model_dir(model_name)
-        os.makedirs(os.path.dirname(output_dir), exist_ok=True)
+        parent_dir = os.path.dirname(output_dir)
+        temp_output_dir = os.path.join(parent_dir, f".{os.path.basename(output_dir)}.{task_id}.tmp")
+        backup_dir = os.path.join(parent_dir, f".{os.path.basename(output_dir)}.{task_id}.bak")
+        os.makedirs(parent_dir, exist_ok=True)
+        shutil.rmtree(temp_output_dir, ignore_errors=True)
+        shutil.rmtree(backup_dir, ignore_errors=True)
 
         update_download_task(task_id, percent=20, message="准备 CTranslate2 转换器...")
         copy_candidates = [
@@ -614,18 +634,33 @@ def convert_marian_model_to_ct2_task(task_id: str, model_name: str):
             message=f"正在转换为 CTranslate2 ({config.MARIAN_CT2_COMPUTE_TYPE})..."
         )
         converter.convert(
-            output_dir,
+            temp_output_dir,
             quantization=config.MARIAN_CT2_COMPUTE_TYPE,
-            force=True
+            force=False
         )
 
         update_download_task(task_id, percent=95, message="校验 CTranslate2 模型文件...")
-        if not has_ct2_model_files(model_name):
+        if not (
+            os.path.isfile(os.path.join(temp_output_dir, "model.bin"))
+            and os.path.isfile(os.path.join(temp_output_dir, "config.json"))
+        ):
             raise RuntimeError("转换结束，但未检测到 CTranslate2 model.bin/config.json")
+
+        if os.path.exists(output_dir):
+            os.replace(output_dir, backup_dir)
+        os.replace(temp_output_dir, output_dir)
+        shutil.rmtree(backup_dir, ignore_errors=True)
 
         finish_download_task(task_id, f"模型 {model_name} 已转换为 CTranslate2: {output_dir}")
 
     except Exception as e:
+        try:
+            if "temp_output_dir" in locals():
+                shutil.rmtree(temp_output_dir, ignore_errors=True)
+            if "backup_dir" in locals() and os.path.exists(backup_dir) and not os.path.exists(output_dir):
+                os.replace(backup_dir, output_dir)
+        except Exception:
+            pass
         fail_download_task(task_id, str(e))
 
 @router.post("/admin/models/m2m100/download")
@@ -680,6 +715,104 @@ def download_m2m100_model_task(task_id: str, model_name: str):
 
     except Exception as e:
         stop_event.set()
+        fail_download_task(task_id, str(e))
+
+@router.post("/admin/models/m2m100/convert-ct2")
+async def convert_m2m100_model_to_ct2(current_user=Depends(require_admin_user)):
+    """将已下载的 M2M100 标准模型转换为 CTranslate2 本地模型。"""
+    return start_m2m100_ct2_conversion(config.M2M100_MODEL, "m2m100_ct2")
+
+@router.post("/admin/models/m2m100-large/convert-ct2")
+async def convert_m2m100_large_model_to_ct2(current_user=Depends(require_admin_user)):
+    """将已下载的 M2M100 1.2B 模型转换为 CTranslate2 本地模型。"""
+    return start_m2m100_ct2_conversion(config.M2M100_LARGE_MODEL, "m2m100_1_2b_ct2")
+
+def start_m2m100_ct2_conversion(model_name: str, kind: str):
+    if not has_huggingface_model_files(model_name):
+        raise HTTPException(status_code=400, detail=f"模型 {model_name} 尚未完整下载，不能转换")
+
+    if importlib.util.find_spec("ctranslate2") is None:
+        raise HTTPException(status_code=500, detail="当前环境未安装 ctranslate2")
+
+    task_id = create_download_task(kind, model_name)
+    run_threaded_download(convert_m2m100_model_to_ct2_task, task_id, model_name)
+
+    return {
+        "success": True,
+        "task_id": task_id,
+        "message": f"模型 {model_name} CTranslate2 转换任务已开始"
+    }
+
+def convert_m2m100_model_to_ct2_task(task_id: str, model_name: str):
+    try:
+        from ctranslate2.converters import TransformersConverter
+
+        update_download_task(task_id, status="running", percent=5, message="检查本地 M2M100 模型...")
+        snapshot_path = get_huggingface_snapshot_path(model_name)
+        if not snapshot_path:
+            raise RuntimeError(f"未找到 {model_name} 的本地 HuggingFace snapshot")
+
+        output_dir = get_ct2_model_dir(model_name)
+        parent_dir = os.path.dirname(output_dir)
+        temp_output_dir = os.path.join(parent_dir, f".{os.path.basename(output_dir)}.{task_id}.tmp")
+        backup_dir = os.path.join(parent_dir, f".{os.path.basename(output_dir)}.{task_id}.bak")
+        os.makedirs(parent_dir, exist_ok=True)
+        shutil.rmtree(temp_output_dir, ignore_errors=True)
+        shutil.rmtree(backup_dir, ignore_errors=True)
+
+        update_download_task(task_id, percent=20, message="准备 CTranslate2 转换器...")
+        copy_candidates = [
+            "tokenizer.json",
+            "tokenizer_config.json",
+            "sentencepiece.bpe.model",
+            "vocab.json",
+            "special_tokens_map.json",
+            "generation_config.json",
+        ]
+        copy_files = [
+            file_name
+            for file_name in copy_candidates
+            if os.path.exists(os.path.join(snapshot_path, file_name))
+        ]
+
+        converter = TransformersConverter(
+            snapshot_path,
+            copy_files=copy_files
+        )
+
+        update_download_task(
+            task_id,
+            percent=45,
+            message=f"正在转换为 CTranslate2 ({config.M2M100_CT2_COMPUTE_TYPE})..."
+        )
+        converter.convert(
+            temp_output_dir,
+            quantization=config.M2M100_CT2_COMPUTE_TYPE,
+            force=False
+        )
+
+        update_download_task(task_id, percent=95, message="校验 CTranslate2 模型文件...")
+        if not (
+            os.path.isfile(os.path.join(temp_output_dir, "model.bin"))
+            and os.path.isfile(os.path.join(temp_output_dir, "config.json"))
+        ):
+            raise RuntimeError("转换结束，但未检测到 CTranslate2 model.bin/config.json")
+
+        if os.path.exists(output_dir):
+            os.replace(output_dir, backup_dir)
+        os.replace(temp_output_dir, output_dir)
+        shutil.rmtree(backup_dir, ignore_errors=True)
+
+        finish_download_task(task_id, f"模型 {model_name} 已转换为 CTranslate2: {output_dir}")
+
+    except Exception as e:
+        try:
+            if "temp_output_dir" in locals():
+                shutil.rmtree(temp_output_dir, ignore_errors=True)
+            if "backup_dir" in locals() and os.path.exists(backup_dir) and not os.path.exists(output_dir):
+                os.replace(backup_dir, output_dir)
+        except Exception:
+            pass
         fail_download_task(task_id, str(e))
 
 @router.post("/admin/models/nllb/download")

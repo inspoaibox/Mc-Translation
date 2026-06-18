@@ -300,11 +300,19 @@ MODEL_WARMUP_ENABLED=true
 TRANSFORMER_WARMUP_MODELS=marian
 TRANSFORMER_WARMUP_PAIRS=zh-en,en-zh
 MARIAN_BACKEND=auto
+M2M100_BACKEND=auto
 CTRANSLATE2_MODELS_DIR=./models/ctranslate2
 MARIAN_CT2_COMPUTE_TYPE=int8
+MARIAN_CT2_INTER_THREADS=1
+MARIAN_CT2_INTRA_THREADS=0
+MARIAN_CT2_MAX_QUEUED_BATCHES=0
+M2M100_CT2_COMPUTE_TYPE=int8
+M2M100_CT2_INTER_THREADS=1
+M2M100_CT2_INTRA_THREADS=0
+M2M100_CT2_MAX_QUEUED_BATCHES=0
 ```
 
-MarianMT 下载完成后，可在管理后台“模型管理”点击“转换 CT2”。转换产物保存在 `./models/ctranslate2`，该目录已被 `.gitignore` 忽略，不应上传到 Git。
+MarianMT 和 M2M100 下载完成后，可在管理后台“模型管理”点击“转换 CT2”。转换产物保存在 `./models/ctranslate2`，该目录已被 `.gitignore` 忽略，不应上传到 Git。
 
 修改后重启：
 
@@ -372,7 +380,7 @@ A: 检查：
 - **认证**: JWT + API Key
 - **数据库**: SQLite (可迁移到 PostgreSQL)
 - **密码加密**: Argon2
-- **翻译引擎**: Argos Translate, MarianMT, M2M100, NLLB, MarianMT CTranslate2
+- **翻译引擎**: Argos Translate, MarianMT, M2M100, NLLB, MarianMT CTranslate2, M2M100 CTranslate2
 - **前端**: 原生 HTML + CSS + JavaScript
 
 ---
