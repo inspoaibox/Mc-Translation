@@ -42,6 +42,7 @@ class Config:
         "qwen2_5_0_5b",
     ]
     DEFAULT_MODEL = os.getenv("DEFAULT_MODEL", "argos")
+    MODEL_ENABLED = {model_name: True for model_name in AVAILABLE_MODELS}
 
     # 支持的语言对
     SUPPORTED_LANGUAGE_PAIRS = {
@@ -139,6 +140,7 @@ class Config:
     TRANSLATION_BATCH_SIZE = int(os.getenv("TRANSLATION_BATCH_SIZE", "8"))
     LLM_MAX_INPUT_TOKENS = int(os.getenv("LLM_MAX_INPUT_TOKENS", "1024"))
     LLM_TRANSLATION_MAX_NEW_TOKENS = int(os.getenv("LLM_TRANSLATION_MAX_NEW_TOKENS", "512"))
+    LLM_TRANSLATION_BATCH_SIZE = int(os.getenv("LLM_TRANSLATION_BATCH_SIZE", "0"))
     TORCH_CPU_THREADS = int(os.getenv("TORCH_CPU_THREADS", "0"))
     MODEL_WARMUP_ENABLED = os.getenv("MODEL_WARMUP_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
     TRANSFORMER_WARMUP_MODELS = [

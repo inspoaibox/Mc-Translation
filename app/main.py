@@ -14,6 +14,8 @@ from urllib.parse import urlparse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, and_
 from threading import Thread
+import gc
+import json
 import time
 import uvicorn
 import torch
@@ -24,7 +26,7 @@ from .schemas import (
     LoginRequest, Token, UserResponse,
     APIKeyCreate, APIKeyResponse,
     TranslationStats, SystemStatus,
-    AdminSettings, PasswordChangeRequest
+    AdminSettings, ModelRuntimeRequest, PasswordChangeRequest
 )
 from .models import ArgosTranslator, MarianTranslator, M2M100Translator, NLLBTranslator, CausalLMTranslator
 from .models.metrics import TranslationMetrics, TranslationResult
@@ -40,6 +42,80 @@ from .model_routes import router as model_router
 translators = {}
 start_time = time.time()
 download_status = {}  # 记录模型下载状态
+MODEL_ENABLED_CONFIG_KEY = "model_enabled"
+
+
+def is_model_enabled(model_name: str) -> bool:
+    return config.MODEL_ENABLED.get(model_name, True)
+
+
+def create_translator(model_name: str):
+    if model_name == "argos":
+        return ArgosTranslator()
+    if model_name == "marian":
+        return MarianTranslator(device=config.DEVICE)
+    if model_name == "m2m100":
+        return M2M100Translator(device=config.DEVICE)
+    if model_name == "m2m100_1_2b":
+        return M2M100Translator(
+            model_name=config.M2M100_LARGE_MODEL,
+            device=config.DEVICE
+        )
+    if model_name == "nllb":
+        return NLLBTranslator(
+            model_name=config.NLLB_MODEL,
+            device=config.DEVICE
+        )
+    if model_name in config.CAUSAL_LM_MODELS:
+        model_info = config.CAUSAL_LM_MODELS[model_name]
+        return CausalLMTranslator(
+            model_id=model_name,
+            model_name=model_info["model_name"],
+            device=config.DEVICE,
+        )
+    raise ValueError(f"不支持的模型: {model_name}")
+
+
+def ensure_translator(model_name: str):
+    translator = translators.get(model_name)
+    if translator:
+        return translator
+
+    if not is_model_enabled(model_name):
+        return None
+
+    translator = create_translator(model_name)
+    translators[model_name] = translator
+    return translator
+
+
+def release_translator(model_name: str) -> bool:
+    removed = translators.pop(model_name, None) is not None
+    for status_key in list(download_status.keys()):
+        if status_key.startswith(f"{model_name}_"):
+            download_status.pop(status_key, None)
+
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    return removed
+
+
+def load_model_enabled_config(raw_value: str | None):
+    if not raw_value:
+        return
+
+    try:
+        saved_state = json.loads(raw_value)
+    except json.JSONDecodeError:
+        return
+
+    if not isinstance(saved_state, dict):
+        return
+
+    for model_name in config.AVAILABLE_MODELS:
+        if model_name in saved_state:
+            config.MODEL_ENABLED[model_name] = bool(saved_state[model_name])
 
 
 def warm_up_translator(model_name: str, translator):
@@ -115,6 +191,7 @@ async def lifespan(app: FastAPI):
             "api_rate_limit_period",
             "access_token_expire_minutes",
             "api_base_url",
+            MODEL_ENABLED_CONFIG_KEY,
         ])))
         saved_config = {item.key: item.value for item in config_result.scalars().all()}
 
@@ -145,35 +222,26 @@ async def lifespan(app: FastAPI):
         if "api_base_url" in saved_config:
             config.API_BASE_URL = saved_config["api_base_url"].strip().rstrip("/")
 
+        load_model_enabled_config(saved_config.get(MODEL_ENABLED_CONFIG_KEY))
+
     print("正在初始化翻译器...")
     if config.DEVICE == "cpu" and config.TORCH_CPU_THREADS > 0:
         torch.set_num_threads(config.TORCH_CPU_THREADS)
         print(f"PyTorch CPU 线程数: {config.TORCH_CPU_THREADS}")
 
-    translators["argos"] = ArgosTranslator()
-    translators["marian"] = MarianTranslator(device=config.DEVICE)
-    translators["m2m100"] = M2M100Translator(device=config.DEVICE)
-    translators["m2m100_1_2b"] = M2M100Translator(
-        model_name=config.M2M100_LARGE_MODEL,
-        device=config.DEVICE
-    )
-    translators["nllb"] = NLLBTranslator(
-        model_name=config.NLLB_MODEL,
-        device=config.DEVICE
-    )
-    for model_id, model_info in config.CAUSAL_LM_MODELS.items():
-        translators[model_id] = CausalLMTranslator(
-            model_id=model_id,
-            model_name=model_info["model_name"],
-            device=config.DEVICE,
-        )
+    for model_name in config.AVAILABLE_MODELS:
+        if not is_model_enabled(model_name):
+            print(f"[PAUSED] 跳过已暂停模型: {model_name}")
+            continue
+        translators[model_name] = create_translator(model_name)
 
     if config.MODEL_WARMUP_ENABLED:
-        Thread(
-            target=translators["argos"].warm_up,
-            args=(config.ARGOS_WARMUP_PAIRS,),
-            daemon=True
-        ).start()
+        if translators.get("argos"):
+            Thread(
+                target=translators["argos"].warm_up,
+                args=(config.ARGOS_WARMUP_PAIRS,),
+                daemon=True
+            ).start()
 
         for warmup_model in config.TRANSFORMER_WARMUP_MODELS:
             translator = translators.get(warmup_model)
@@ -344,7 +412,10 @@ async def admin_test_translate(
         if model_name not in config.AVAILABLE_MODELS:
             raise HTTPException(status_code=400, detail=f"不支持的模型: {model_name}")
 
-        translator = translators.get(model_name)
+        if not is_model_enabled(model_name):
+            raise HTTPException(status_code=400, detail=f"模型 {model_name} 已暂停，请先在模型管理中启用")
+
+        translator = ensure_translator(model_name)
         if not translator:
             raise HTTPException(status_code=500, detail=f"模型 {model_name} 未初始化")
 
@@ -391,6 +462,43 @@ async def get_translate_status(
     """获取翻译/下载状态"""
     current_user = await get_current_user_from_token(credentials.credentials, db)
     return download_status
+
+@app.post("/admin/models/{model_name}/runtime")
+async def set_model_runtime(
+    model_name: str,
+    request: ModelRuntimeRequest,
+    credentials: HTTPAuthorizationCredentials = Security(security),
+    db: AsyncSession = Depends(get_db)
+):
+    """启用或暂停模型运行实例。"""
+    current_user = await get_current_user_from_token(credentials.credentials, db)
+
+    if model_name not in config.AVAILABLE_MODELS:
+        raise HTTPException(status_code=400, detail=f"不支持的模型: {model_name}")
+
+    config.MODEL_ENABLED[model_name] = request.enabled
+    if request.enabled:
+        ensure_translator(model_name)
+        message = f"模型 {model_name} 已启用"
+    else:
+        release_translator(model_name)
+        message = f"模型 {model_name} 已暂停，已释放运行实例"
+
+    await upsert_system_config(
+        db,
+        MODEL_ENABLED_CONFIG_KEY,
+        json.dumps(config.MODEL_ENABLED, ensure_ascii=False),
+        "Per-model runtime enabled state"
+    )
+    await db.commit()
+
+    return {
+        "success": True,
+        "model": model_name,
+        "enabled": request.enabled,
+        "running": model_name in translators,
+        "message": message,
+    }
 
 # ===== 统计接口 =====
 
@@ -558,6 +666,9 @@ async def save_admin_settings(
     if settings.default_model not in config.AVAILABLE_MODELS:
         raise HTTPException(status_code=400, detail=f"不支持的默认模型: {settings.default_model}")
 
+    if not is_model_enabled(settings.default_model):
+        raise HTTPException(status_code=400, detail=f"默认模型 {settings.default_model} 已暂停，请先在模型管理中启用")
+
     api_base_url = (settings.api_base_url or "").strip().rstrip("/")
     parsed_api_base_url = urlparse(api_base_url)
     if api_base_url and (parsed_api_base_url.scheme not in {"http", "https"} or not parsed_api_base_url.netloc):
@@ -683,7 +794,10 @@ async def translate(
         if model_name not in config.AVAILABLE_MODELS:
             raise HTTPException(status_code=400, detail=f"不支持的模型: {model_name}")
 
-        translator = translators.get(model_name)
+        if not is_model_enabled(model_name):
+            raise HTTPException(status_code=400, detail=f"模型 {model_name} 已暂停，请先在模型管理中启用")
+
+        translator = ensure_translator(model_name)
         if not translator:
             raise HTTPException(status_code=500, detail=f"模型 {model_name} 未初始化")
 

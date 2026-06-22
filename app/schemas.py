@@ -103,6 +103,9 @@ class AdminSettings(BaseModel):
     token_expire_minutes: int = Field(..., ge=1)
     api_base_url: Optional[str] = Field("", max_length=500)
 
+class ModelRuntimeRequest(BaseModel):
+    enabled: bool
+
 class PasswordChangeRequest(BaseModel):
     current_password: str = Field(..., min_length=1)
     new_password: str = Field(..., min_length=6)

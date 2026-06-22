@@ -11,7 +11,7 @@ import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from .formatting import translate_preserving_line_format_batched
-from .generation import model_load_kwargs
+from .generation import batched, model_load_kwargs
 from .metrics import TranslationMetrics, TranslationResult
 
 
@@ -144,41 +144,72 @@ class CausalLMTranslator:
         dynamic_limit = int(input_token_count * 1.8) + 24
         return max(24, min(config.LLM_TRANSLATION_MAX_NEW_TOKENS, dynamic_limit))
 
+    def _batch_size(self) -> int:
+        from ..config import config
+
+        if config.LLM_TRANSLATION_BATCH_SIZE > 0:
+            return config.LLM_TRANSLATION_BATCH_SIZE
+        return 4 if self.device == "cuda" else 1
+
     def _translate_one(self, text: str, source_lang: str, target_lang: str) -> Optional[str]:
+        translated = self._translate_many([text], source_lang, target_lang)
+        return translated[0] if translated else None
+
+    def _translate_many(self, texts: list[str], source_lang: str, target_lang: str) -> Optional[list[str]]:
         from ..config import config
 
         if not self.tokenizer or not self.model:
             return None
 
-        prompt = self._render_prompt(text, source_lang, target_lang)
-        inputs = self.tokenizer(
-            prompt,
-            return_tensors="pt",
-            truncation=True,
-            max_length=config.LLM_MAX_INPUT_TOKENS,
-        ).to(self.device)
+        prompts = [self._render_prompt(text, source_lang, target_lang) for text in texts]
 
-        input_token_count = inputs["input_ids"].shape[1]
-        with self._generation_lock, torch.inference_mode():
+        with self._generation_lock:
+            original_padding_side = getattr(self.tokenizer, "padding_side", "right")
+            self.tokenizer.padding_side = "left"
+            try:
+                inputs = self.tokenizer(
+                    prompts,
+                    return_tensors="pt",
+                    padding=True,
+                    truncation=True,
+                    max_length=config.LLM_MAX_INPUT_TOKENS,
+                ).to(self.device)
+            finally:
+                self.tokenizer.padding_side = original_padding_side
+
+            input_width = inputs["input_ids"].shape[1]
+            attention_mask = inputs.get("attention_mask")
+            if attention_mask is not None:
+                max_input_token_count = int(attention_mask.sum(dim=1).max().item())
+            else:
+                max_input_token_count = input_width
+
             pad_token_id = (
                 self.tokenizer.pad_token_id
                 if self.tokenizer.pad_token_id is not None
                 else self.tokenizer.eos_token_id
             )
-            generated = self.model.generate(
-                **inputs,
-                do_sample=False,
-                num_beams=1,
-                use_cache=True,
-                max_new_tokens=self._max_new_tokens(input_token_count),
-                pad_token_id=pad_token_id,
-                eos_token_id=self.tokenizer.eos_token_id,
-            )
+            with torch.inference_mode():
+                generated = self.model.generate(
+                    **inputs,
+                    do_sample=False,
+                    num_beams=1,
+                    use_cache=True,
+                    max_new_tokens=self._max_new_tokens(max_input_token_count),
+                    pad_token_id=pad_token_id,
+                    eos_token_id=self.tokenizer.eos_token_id,
+                )
 
-        output_ids = generated[0][input_token_count:]
-        decoded = self.tokenizer.decode(output_ids, skip_special_tokens=True)
-        cleaned = self._clean_output(decoded)
-        return cleaned or None
+        translated = []
+        for row in generated:
+            output_ids = row[input_width:]
+            decoded = self.tokenizer.decode(output_ids, skip_special_tokens=True)
+            cleaned = self._clean_output(decoded)
+            if not cleaned:
+                return None
+            translated.append(cleaned)
+
+        return translated
 
     def translate(self, text: str, source_lang: str, target_lang: str) -> Optional[str]:
         return self.translate_with_metrics(text, source_lang, target_lang).text
@@ -195,15 +226,15 @@ class CausalLMTranslator:
 
             def translate_segments(segments: list[str]) -> Optional[list[str]]:
                 translated_texts = []
-                for segment in segments:
-                    segment_start = time.perf_counter()
-                    translated = self._translate_one(segment, source_lang, target_lang)
-                    metrics.inference_time += time.perf_counter() - segment_start
-                    metrics.segment_count += 1
+                for chunk in batched(segments, self._batch_size()):
+                    batch_start = time.perf_counter()
+                    translated = self._translate_many(chunk, source_lang, target_lang)
+                    metrics.inference_time += time.perf_counter() - batch_start
+                    metrics.segment_count += len(chunk)
                     metrics.batch_count += 1
                     if translated is None:
                         return None
-                    translated_texts.append(translated)
+                    translated_texts.extend(translated)
                 return translated_texts
 
             def translate_segment(segment: str) -> Optional[str]:

@@ -48,6 +48,13 @@ def build_all_language_pairs(languages):
         if source != target
     ]
 
+def model_enabled(model_id: str) -> bool:
+    return config.MODEL_ENABLED.get(model_id, True)
+
+def ensure_model_enabled(model_id: str):
+    if not model_enabled(model_id):
+        raise HTTPException(status_code=400, detail=f"模型 {model_id} 已暂停，请先启用")
+
 def has_huggingface_model_files(model_name: str) -> bool:
     """Check whether a HuggingFace model cache contains actual weight files."""
     cache_dir = os.path.expanduser("~/.cache/huggingface/hub")
@@ -277,6 +284,9 @@ async def save_model_config(
     if request.default_model and request.default_model not in config.AVAILABLE_MODELS:
         raise HTTPException(status_code=400, detail=f"不支持的默认模型: {request.default_model}")
 
+    if request.default_model and not model_enabled(request.default_model):
+        raise HTTPException(status_code=400, detail=f"默认模型 {request.default_model} 已暂停，请先启用")
+
     await upsert_config(db, "device", device, "Model inference device: cpu or cuda")
 
     if request.default_model:
@@ -402,7 +412,8 @@ async def get_models_status(current_user=Depends(require_admin_user)):
         cached_models = [m for m in huggingface_models if m == model_name]
         downloaded = len(downloaded_models) > 0
         causal_lm_status[model_id] = {
-            "loaded": transformers_available and downloaded,
+            "enabled": model_enabled(model_id),
+            "loaded": model_enabled(model_id) and transformers_available and downloaded,
             "type": "causal_lm",
             "size": model_info.get("size", "1GB+"),
             "display_name": model_info.get("display_name", model_id),
@@ -418,7 +429,8 @@ async def get_models_status(current_user=Depends(require_admin_user)):
 
     return {
         "argos": {
-            "loaded": argos_available,
+            "enabled": model_enabled("argos"),
+            "loaded": model_enabled("argos") and argos_available,
             "type": "offline",
             "size": "50-100MB/package",
             "downloaded_packages": argos_packages,
@@ -426,7 +438,8 @@ async def get_models_status(current_user=Depends(require_admin_user)):
             "has_downloads": len(argos_packages) > 0
         },
         "marian": {
-            "loaded": transformers_available and marian_downloaded,
+            "enabled": model_enabled("marian"),
+            "loaded": model_enabled("marian") and transformers_available and marian_downloaded,
             "type": "neural",
             "size": "200-300MB",
             "downloaded_models": marian_models,
@@ -439,7 +452,8 @@ async def get_models_status(current_user=Depends(require_admin_user)):
             "has_downloads": marian_downloaded
         },
         "m2m100": {
-            "loaded": transformers_available and m2m100_downloaded,
+            "enabled": model_enabled("m2m100"),
+            "loaded": model_enabled("m2m100") and transformers_available and m2m100_downloaded,
             "type": "multilingual",
             "size": "1.2GB",
             "downloaded_models": m2m100_models,
@@ -452,7 +466,8 @@ async def get_models_status(current_user=Depends(require_admin_user)):
             "has_downloads": m2m100_downloaded
         },
         "m2m100_1_2b": {
-            "loaded": transformers_available and m2m100_large_downloaded,
+            "enabled": model_enabled("m2m100_1_2b"),
+            "loaded": model_enabled("m2m100_1_2b") and transformers_available and m2m100_large_downloaded,
             "type": "multilingual",
             "size": "4.5GB",
             "downloaded_models": m2m100_large_models,
@@ -465,7 +480,8 @@ async def get_models_status(current_user=Depends(require_admin_user)):
             "has_downloads": m2m100_large_downloaded
         },
         "nllb": {
-            "loaded": transformers_available and nllb_downloaded,
+            "enabled": model_enabled("nllb"),
+            "loaded": model_enabled("nllb") and transformers_available and nllb_downloaded,
             "type": "multilingual",
             "size": "2.5GB+",
             "downloaded_models": nllb_models,
@@ -584,6 +600,7 @@ async def download_marian_model(
     current_user=Depends(require_admin_user)
 ):
     """下载 MarianMT 模型"""
+    ensure_model_enabled("marian")
     available_models = {
         model["model_name"]
         for model in (await list_available_marian_models(current_user))["models"]
@@ -637,6 +654,7 @@ async def convert_marian_model_to_ct2(
     current_user=Depends(require_admin_user)
 ):
     """将已下载的 MarianMT 模型转换为 CTranslate2 本地模型。"""
+    ensure_model_enabled("marian")
     if not has_huggingface_model_files(model_name):
         raise HTTPException(status_code=400, detail=f"模型 {model_name} 尚未完整下载，不能转换")
 
@@ -724,6 +742,7 @@ def convert_marian_model_to_ct2_task(task_id: str, model_name: str):
 @router.post("/admin/models/m2m100/download")
 async def download_m2m100_model(current_user=Depends(require_admin_user)):
     """下载 M2M100 标准模型"""
+    ensure_model_enabled("m2m100")
     task_id = create_download_task("m2m100", config.M2M100_MODEL)
     run_threaded_download(download_m2m100_model_task, task_id, config.M2M100_MODEL)
 
@@ -736,6 +755,7 @@ async def download_m2m100_model(current_user=Depends(require_admin_user)):
 @router.post("/admin/models/m2m100-large/download")
 async def download_m2m100_large_model(current_user=Depends(require_admin_user)):
     """下载 M2M100 1.2B 模型"""
+    ensure_model_enabled("m2m100_1_2b")
     task_id = create_download_task("m2m100_1_2b", config.M2M100_LARGE_MODEL)
     run_threaded_download(download_m2m100_model_task, task_id, config.M2M100_LARGE_MODEL)
 
@@ -778,11 +798,13 @@ def download_m2m100_model_task(task_id: str, model_name: str):
 @router.post("/admin/models/m2m100/convert-ct2")
 async def convert_m2m100_model_to_ct2(current_user=Depends(require_admin_user)):
     """将已下载的 M2M100 标准模型转换为 CTranslate2 本地模型。"""
+    ensure_model_enabled("m2m100")
     return start_m2m100_ct2_conversion(config.M2M100_MODEL, "m2m100_ct2")
 
 @router.post("/admin/models/m2m100-large/convert-ct2")
 async def convert_m2m100_large_model_to_ct2(current_user=Depends(require_admin_user)):
     """将已下载的 M2M100 1.2B 模型转换为 CTranslate2 本地模型。"""
+    ensure_model_enabled("m2m100_1_2b")
     return start_m2m100_ct2_conversion(config.M2M100_LARGE_MODEL, "m2m100_1_2b_ct2")
 
 def start_m2m100_ct2_conversion(model_name: str, kind: str):
@@ -871,6 +893,7 @@ def convert_m2m100_model_to_ct2_task(task_id: str, model_name: str):
 @router.post("/admin/models/nllb/download")
 async def download_nllb_model(current_user=Depends(require_admin_user)):
     """下载 NLLB 模型"""
+    ensure_model_enabled("nllb")
     task_id = create_download_task("nllb", config.NLLB_MODEL)
     run_threaded_download(download_nllb_model_task, task_id, config.NLLB_MODEL)
 
@@ -913,6 +936,7 @@ def download_nllb_model_task(task_id: str, model_name: str):
 @router.post("/admin/models/nllb/convert-ct2")
 async def convert_nllb_model_to_ct2(current_user=Depends(require_admin_user)):
     """将已下载的 NLLB 模型转换为 CTranslate2 本地模型。"""
+    ensure_model_enabled("nllb")
     if not has_huggingface_model_files(config.NLLB_MODEL):
         raise HTTPException(status_code=400, detail=f"模型 {config.NLLB_MODEL} 尚未完整下载，不能转换")
 
@@ -1002,6 +1026,7 @@ async def download_causal_lm_model(
     current_user=Depends(require_admin_user)
 ):
     """下载通用大语言模型翻译后端。"""
+    ensure_model_enabled(model_id)
     model_info = get_causal_lm_model_info(model_id)
     model_name = model_info["model_name"]
     task_id = create_download_task(model_id, model_name)
@@ -1074,6 +1099,7 @@ async def install_argos_package(
     current_user=Depends(require_admin_user)
 ):
     """安装 Argos 语言包"""
+    ensure_model_enabled("argos")
     task_id = create_download_task(
         "argos",
         f"{request.source_lang}->{request.target_lang}"

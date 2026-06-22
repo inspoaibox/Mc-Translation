@@ -433,11 +433,13 @@ async function submitCreateAPIKey(event) {
 }
 
 // 复制到剪贴板
-function copyToClipboard(text, button = null) {
+function copyToClipboard(text, button = null, options = {}) {
     const showSuccess = () => {
         if (!button) {
-            alert('✓ 已复制到剪贴板');
-            return;
+            if (!options.silent) {
+                alert('✓ 已复制到剪贴板');
+            }
+            return true;
         }
 
         const originalText = button.textContent;
@@ -448,20 +450,22 @@ function copyToClipboard(text, button = null) {
             button.textContent = originalText;
             button.disabled = false;
         }, 1600);
+
+        return true;
     };
 
     const showError = () => {
         alert('复制失败，请手动选择并复制');
+        return false;
     };
 
     if (navigator.clipboard && window.isSecureContext) {
-        navigator.clipboard.writeText(text).then(showSuccess).catch(() => {
-            fallbackCopyText(text) ? showSuccess() : showError();
+        return navigator.clipboard.writeText(text).then(showSuccess).catch(() => {
+            return fallbackCopyText(text) ? showSuccess() : showError();
         });
-        return;
     }
 
-    fallbackCopyText(text) ? showSuccess() : showError();
+    return Promise.resolve(fallbackCopyText(text) ? showSuccess() : showError());
 }
 
 function fallbackCopyText(text) {
@@ -556,7 +560,8 @@ async function loadTranslator() {
             <div class="translator-langbar">
                 <div class="translator-lang-field">
                     <label for="source-lang">源语言</label>
-                    <select id="source-lang" class="translator-select" onchange="updateTranslatorMeta()">
+                    <select id="source-lang" class="translator-select" onchange="handleSourceLanguageChange()">
+                        <option value="auto">自动检测</option>
                         <option value="en">英语</option>
                         <option value="zh">中文</option>
                         <option value="ja">日语</option>
@@ -591,7 +596,7 @@ async function loadTranslator() {
                         <span>输入文本</span>
                         <span id="input-count">0 字符</span>
                     </div>
-                    <textarea id="input-text" class="translator-textarea" rows="10" placeholder="输入需要翻译的内容..." oninput="updateTranslatorMeta()"></textarea>
+                    <textarea id="input-text" class="translator-textarea" rows="10" placeholder="输入需要翻译的内容..." oninput="handleTranslatorInput()"></textarea>
                 </section>
 
                 <section class="translator-panel translator-output-panel">
@@ -624,15 +629,16 @@ function isTranslatorModelReady(model, sourceLang, targetLang) {
     const modelInfo = status[model];
     const pair = `${sourceLang}-${targetLang}`;
     return Boolean(
+        modelInfo.enabled !== false &&
         modelInfo.loaded &&
         (!Array.isArray(modelInfo.ready_pairs) || modelInfo.ready_pairs.includes(pair))
     );
 }
 
-function updateTranslatorModelAvailability() {
+function updateTranslatorModelAvailability(sourceOverride = null, targetOverride = null) {
     const modelSelect = document.getElementById('model-select');
-    const sourceLang = document.getElementById('source-lang')?.value || 'en';
-    const targetLang = document.getElementById('target-lang')?.value || 'zh';
+    const sourceLang = sourceOverride || resolveTranslatorLanguages().sourceLang;
+    const targetLang = targetOverride || resolveTranslatorLanguages().targetLang;
 
     if (!modelSelect) {
         return;
@@ -640,8 +646,10 @@ function updateTranslatorModelAvailability() {
 
     Array.from(modelSelect.options).forEach(option => {
         const ready = isTranslatorModelReady(option.value, sourceLang, targetLang);
+        const modelInfo = window.translatorModelStatus?.[option.value];
+        const suffix = modelInfo?.enabled === false ? ' - 已暂停' : (ready ? '' : ' - 未就绪');
         option.disabled = !ready;
-        option.textContent = option.textContent.replace(' - 未就绪', '') + (ready ? '' : ' - 未就绪');
+        option.textContent = option.textContent.replace(/ - (未就绪|已暂停)$/u, '') + suffix;
     });
 
     if (modelSelect.selectedOptions[0]?.disabled) {
@@ -654,6 +662,7 @@ function updateTranslatorModelAvailability() {
 
 function getLanguageName(langCode) {
     const names = {
+        auto: '自动检测',
         en: '英语',
         zh: '中文',
         ja: '日语',
@@ -726,22 +735,130 @@ async function fetchApiDocsBaseUrl() {
     return getBrowserApiBaseUrl();
 }
 
+function countPatternMatches(text, pattern) {
+    return (text.match(pattern) || []).length;
+}
+
+function detectTranslatorLanguage(text) {
+    const sample = String(text || '').trim();
+
+    if (!sample) {
+        return { sourceLang: 'en', targetLang: 'zh', detectedName: '自动检测' };
+    }
+
+    const scores = {
+        zh: countPatternMatches(sample, /[\u3400-\u9fff\uf900-\ufaff]/g),
+        ja: countPatternMatches(sample, /[\u3040-\u30ff]/g),
+        ko: countPatternMatches(sample, /[\uac00-\ud7af]/g),
+        ru: countPatternMatches(sample, /[\u0400-\u04ff]/g)
+    };
+
+    if (scores.zh > 0 && scores.zh >= scores.ja) {
+        return { sourceLang: 'zh', targetLang: 'en', detectedName: getLanguageName('zh') };
+    }
+
+    if (scores.ja > 0) {
+        return { sourceLang: 'ja', targetLang: 'zh', detectedName: getLanguageName('ja') };
+    }
+
+    if (scores.ko > 0) {
+        return { sourceLang: 'ko', targetLang: 'zh', detectedName: getLanguageName('ko') };
+    }
+
+    if (scores.ru > 0) {
+        return { sourceLang: 'ru', targetLang: 'zh', detectedName: getLanguageName('ru') };
+    }
+
+    if (/[äöüß]/i.test(sample)) {
+        return { sourceLang: 'de', targetLang: 'zh', detectedName: getLanguageName('de') };
+    }
+
+    if (/[ñáéíóúü¿¡]/i.test(sample)) {
+        return { sourceLang: 'es', targetLang: 'zh', detectedName: getLanguageName('es') };
+    }
+
+    if (/[àâçéèêëîïôûùÿœæ]/i.test(sample)) {
+        return { sourceLang: 'fr', targetLang: 'zh', detectedName: getLanguageName('fr') };
+    }
+
+    return { sourceLang: 'en', targetLang: 'zh', detectedName: getLanguageName('en') };
+}
+
+function getDefaultTargetLanguage(sourceLang) {
+    return sourceLang === 'zh' ? 'en' : 'zh';
+}
+
+function resolveTranslatorLanguages(textOverride = null) {
+    const input = document.getElementById('input-text');
+    const sourceSelect = document.getElementById('source-lang');
+    const targetSelect = document.getElementById('target-lang');
+    const text = textOverride !== null ? textOverride : (input?.value || '');
+    const selectedSource = sourceSelect?.value || 'auto';
+
+    if (selectedSource === 'auto') {
+        const detected = detectTranslatorLanguage(text);
+        return {
+            ...detected,
+            sourceMode: 'auto',
+            targetLang: targetSelect?.value || detected.targetLang
+        };
+    }
+
+    return {
+        sourceMode: 'manual',
+        sourceLang: selectedSource,
+        targetLang: targetSelect?.value || getDefaultTargetLanguage(selectedSource),
+        detectedName: getLanguageName(selectedSource)
+    };
+}
+
+function applyDetectedTargetLanguage() {
+    const sourceSelect = document.getElementById('source-lang');
+    const targetSelect = document.getElementById('target-lang');
+
+    if (!targetSelect) {
+        return;
+    }
+
+    if (sourceSelect?.value === 'auto') {
+        const detected = detectTranslatorLanguage(document.getElementById('input-text')?.value || '');
+        targetSelect.value = detected.targetLang;
+        return;
+    }
+
+    if (sourceSelect?.value === targetSelect.value) {
+        targetSelect.value = getDefaultTargetLanguage(sourceSelect.value);
+    }
+}
+
+function handleTranslatorInput() {
+    applyDetectedTargetLanguage();
+    updateTranslatorMeta();
+}
+
+function handleSourceLanguageChange() {
+    applyDetectedTargetLanguage();
+    updateTranslatorMeta();
+}
+
 function updateTranslatorMeta() {
     const input = document.getElementById('input-text');
     const count = document.getElementById('input-count');
     const meta = document.getElementById('translation-meta');
-    const sourceLang = document.getElementById('source-lang')?.value || 'en';
-    const targetLang = document.getElementById('target-lang')?.value || 'zh';
+    const languages = resolveTranslatorLanguages();
+    const sourceLabel = languages.sourceMode === 'auto'
+        ? `自动检测${input?.value.trim() ? `：${languages.detectedName}` : ''}`
+        : getLanguageName(languages.sourceLang);
 
     if (count && input) {
         count.textContent = `${input.value.length} 字符`;
     }
 
     if (meta) {
-        meta.textContent = `${getLanguageName(sourceLang)} → ${getLanguageName(targetLang)}`;
+        meta.textContent = `${sourceLabel} → ${getLanguageName(languages.targetLang)}`;
     }
 
-    updateTranslatorModelAvailability();
+    updateTranslatorModelAvailability(languages.sourceLang, languages.targetLang);
 }
 
 function swapTranslatorLanguages() {
@@ -750,9 +867,9 @@ function swapTranslatorLanguages() {
     const input = document.getElementById('input-text');
     const output = document.getElementById('output-text');
 
-    const sourceValue = sourceSelect.value;
+    const languages = resolveTranslatorLanguages();
     sourceSelect.value = targetSelect.value;
-    targetSelect.value = sourceValue;
+    targetSelect.value = languages.sourceLang;
 
     if (output.value.trim()) {
         input.value = output.value;
@@ -778,10 +895,10 @@ function copyTranslationResult() {
         return;
     }
 
-    navigator.clipboard.writeText(output.value).then(() => {
-        document.getElementById('translate-result').innerHTML = '<div class="translator-message success">结果已复制到剪贴板</div>';
-    }).catch(() => {
-        alert('复制失败，请手动复制');
+    copyToClipboard(output.value, null, { silent: true }).then(copied => {
+        if (copied) {
+            document.getElementById('translate-result').innerHTML = '<div class="translator-message success">结果已复制到剪贴板</div>';
+        }
     });
 }
 
@@ -882,9 +999,12 @@ async function pollDownloadTask(taskId, options = {}) {
 // 执行翻译测试（管理后台使用 JWT Token）
 async function testTranslate() {
     const text = document.getElementById('input-text').value;
-    const sourceLang = document.getElementById('source-lang').value;
-    const targetLang = document.getElementById('target-lang').value;
-    const model = document.getElementById('model-select').value;
+    const languages = resolveTranslatorLanguages(text);
+    const sourceLang = languages.sourceLang;
+    const targetLang = languages.targetLang;
+    updateTranslatorModelAvailability(sourceLang, targetLang);
+    const modelSelect = document.getElementById('model-select');
+    const model = modelSelect.value;
     const resultDiv = document.getElementById('translate-result');
     const output = document.getElementById('output-text');
 
@@ -898,8 +1018,17 @@ async function testTranslate() {
         return;
     }
 
+    if (!isTranslatorModelReady(model, sourceLang, targetLang)) {
+        alert(`当前没有就绪模型支持 ${getLanguageName(sourceLang)} → ${getLanguageName(targetLang)}，请在模型管理中下载对应模型或切换语言。`);
+        return;
+    }
+
     output.value = '';
-    resultDiv.innerHTML = '<div class="translator-message loading">正在翻译...</div>';
+    resultDiv.innerHTML = `
+        <div class="translator-message loading">
+            正在翻译... ${escapeHTML(getLanguageName(sourceLang))} → ${escapeHTML(getLanguageName(targetLang))}
+        </div>
+    `;
 
     // 启动状态轮询
     const statusKey = `${model}_${sourceLang}_${targetLang}`;
@@ -991,6 +1120,27 @@ async function loadModels() {
             ? await configResponse.json()
             : { use_gpu: false, default_model: 'argos', available_models: ['argos', 'marian', 'm2m100'] };
         const defaultModel = modelConfig.default_model || 'argos';
+        const isModelEnabled = (modelInfo) => modelInfo?.enabled !== false;
+        const runtimeBadge = (modelInfo) => isModelEnabled(modelInfo)
+            ? '<span class="badge badge-success">运行中</span>'
+            : '<span class="badge" style="background: #fee2e2; color: #991b1b;">已暂停</span>';
+        const runtimeToggleButton = (modelId, modelInfo) => {
+            const enabled = isModelEnabled(modelInfo);
+            return `<button class="btn btn-sm" style="padding: 0.25rem 0.75rem; font-size: 0.875rem; background: ${enabled ? '#ef4444' : '#10b981'}; color: white; border: none; border-radius: 0.375rem; cursor: pointer;" onclick="toggleModelRuntime(event, '${modelId}', ${enabled ? 'false' : 'true'})">${enabled ? '暂停' : '启用'}</button>`;
+        };
+        const availabilityBadge = (modelInfo, unavailableLabel = '未下载') => {
+            if (!isModelEnabled(modelInfo)) {
+                return '<span class="badge" style="background: #fee2e2; color: #991b1b;">已暂停</span>';
+            }
+            return modelInfo?.loaded
+                ? '<span class="badge badge-success">✓ 可用</span>'
+                : `<span class="badge" style="background: #fef3c7; color: #92400e;">${unavailableLabel}</span>`;
+        };
+        const disabledActionButton = () => '<button class="btn btn-sm" disabled style="padding: 0.25rem 0.75rem; font-size: 0.875rem; background: #e5e7eb; color: #6b7280; border: none; border-radius: 0.375rem;">已暂停</button>';
+        const defaultModelOption = (modelId, label) => {
+            const enabled = isModelEnabled(status[modelId]);
+            return `<option value="${modelId}" ${defaultModel === modelId ? 'selected' : ''} ${enabled ? '' : 'disabled'}>${label}${enabled ? '' : '（已暂停）'}</option>`;
+        };
         const ct2StatusLine = (modelInfo) => {
             if (!modelInfo?.has_downloads) {
                 return '';
@@ -1035,6 +1185,9 @@ async function loadModels() {
             return '<span style="color: #f59e0b;">⚠ 未下载</span>';
         };
         const modelActionButton = (modelInfo, infoKey, downloadHandler, convertHandler) => {
+            if (!isModelEnabled(modelInfo)) {
+                return disabledActionButton();
+            }
             if (!modelInfo?.loaded) {
                 return `<button class="btn btn-sm" style="padding: 0.25rem 0.75rem; font-size: 0.875rem; background: #10b981; color: white; border: none; border-radius: 0.375rem; cursor: pointer;" onclick="${downloadHandler}(event)">下载/修复</button>`;
             }
@@ -1047,6 +1200,9 @@ async function loadModels() {
             </div>`;
         };
         const causalLmActionButton = (modelInfo, modelId) => {
+            if (!isModelEnabled(modelInfo)) {
+                return disabledActionButton();
+            }
             if (!modelInfo?.loaded) {
                 return `<button class="btn btn-sm" style="padding: 0.25rem 0.75rem; font-size: 0.875rem; background: #10b981; color: white; border: none; border-radius: 0.375rem; cursor: pointer;" onclick="downloadCausalLMModel(event, '${modelId}')">下载/修复</button>`;
             }
@@ -1067,12 +1223,16 @@ async function loadModels() {
                             </td>
                             <td>大语言模型翻译</td>
                             <td>${escapeHTML(modelInfo?.size || model.size)}</td>
-                            <td>${modelInfo?.loaded ? '<span class="badge badge-success">✓ 可用</span>' : '<span class="badge" style="background: #fef3c7; color: #92400e;">未下载</span>'}</td>
+                            <td>${runtimeBadge(modelInfo)}</td>
+                            <td>${availabilityBadge(modelInfo)}</td>
                             <td>
                                 ${causalLmDownloadStatus(modelInfo)}
                             </td>
                             <td data-download-card>
-                                ${causalLmActionButton(modelInfo, model.value)}
+                                <div class="action-stack">
+                                    ${runtimeToggleButton(model.value, modelInfo)}
+                                    ${causalLmActionButton(modelInfo, model.value)}
+                                </div>
                             </td>
                         </tr>
             `;
@@ -1081,6 +1241,7 @@ async function loadModels() {
             const modelInfo = status[model.value];
             const modelName = modelInfo?.model_name || model.modelName;
             const downloaded = Boolean(modelInfo?.has_downloads);
+            const enabled = isModelEnabled(modelInfo);
             const authNote = modelInfo?.requires_auth ? '<br><small style="color: #92400e;">可能需要先在 HuggingFace 登录/授权</small>' : '';
             return `
                     <div data-download-card style="border: 1px solid var(--border-color); border-radius: 0.5rem; padding: 1.5rem;">
@@ -1091,7 +1252,7 @@ async function loadModels() {
                             <span style="background: #fef3c7; color: #92400e; padding: 0.25rem 0.5rem; border-radius: 0.25rem; font-size: 0.8rem; margin-left: 0.5rem;">${escapeHTML(modelInfo?.size || model.size)}</span>
                         </div>
                         <p style="color: #666; font-size: 0.85rem; margin-bottom: 1rem;"><code>${escapeHTML(modelName)}</code>${authNote}</p>
-                        <button class="btn" ${downloaded ? 'disabled' : ''} style="width: 100%; padding: 0.5rem; background: ${downloaded ? '#dcfce7' : '#10b981'}; color: ${downloaded ? '#166534' : 'white'}; border: none; border-radius: 0.375rem; cursor: ${downloaded ? 'not-allowed' : 'pointer'};" onclick="downloadCausalLMModel(event, '${model.value}')">${downloaded ? '已下载' : '下载/修复'}</button>
+                        <button class="btn" ${downloaded || !enabled ? 'disabled' : ''} style="width: 100%; padding: 0.5rem; background: ${!enabled ? '#e5e7eb' : (downloaded ? '#dcfce7' : '#10b981')}; color: ${!enabled ? '#6b7280' : (downloaded ? '#166534' : 'white')}; border: none; border-radius: 0.375rem; cursor: ${downloaded || !enabled ? 'not-allowed' : 'pointer'};" onclick="downloadCausalLMModel(event, '${model.value}')">${!enabled ? '已暂停' : (downloaded ? '已下载' : '下载/修复')}</button>
                     </div>
             `;
         }).join('');
@@ -1111,6 +1272,7 @@ async function loadModels() {
                             <th>模型名称</th>
                             <th>类型</th>
                             <th>大小</th>
+                            <th>运行</th>
                             <th>状态</th>
                             <th>已下载模型</th>
                             <th>操作</th>
@@ -1125,14 +1287,20 @@ async function loadModels() {
                             </td>
                             <td>离线翻译</td>
                             <td>~50-100MB/包</td>
-                            <td>${status.argos.loaded ? '<span class="badge badge-success">✓ 可用</span>' : '<span class="badge badge-danger">✗ 不可用</span>'}</td>
+                            <td>${runtimeBadge(status.argos)}</td>
+                            <td>${availabilityBadge(status.argos, '✗ 不可用')}</td>
                             <td>
                                 ${status.argos.has_downloads
                                     ? `<span style="color: #10b981;">✓ ${status.argos.downloaded_packages.length} 个语言包</span><br><small style="color: #666;">${status.argos.downloaded_packages.slice(0, 3).join(', ')}${status.argos.downloaded_packages.length > 3 ? '...' : ''}</small>`
                                     : '<span style="color: #f59e0b;">⚠ 未下载</span>'}
                             </td>
                             <td>
-                                <button class="btn btn-sm" style="padding: 0.25rem 0.75rem; font-size: 0.875rem; background: #3b82f6; color: white; border: none; border-radius: 0.375rem; cursor: pointer;" onclick="manageArgosPackages()">管理语言包</button>
+                                <div class="action-stack">
+                                    ${runtimeToggleButton('argos', status.argos)}
+                                    ${isModelEnabled(status.argos)
+                                        ? '<button class="btn btn-sm" style="padding: 0.25rem 0.75rem; font-size: 0.875rem; background: #3b82f6; color: white; border: none; border-radius: 0.375rem; cursor: pointer;" onclick="manageArgosPackages()">管理语言包</button>'
+                                        : disabledActionButton()}
+                                </div>
                             </td>
                         </tr>
                         <tr>
@@ -1143,12 +1311,18 @@ async function loadModels() {
                             </td>
                             <td>神经机器翻译</td>
                             <td>~200-300MB</td>
-                            <td>${status.marian.loaded ? '<span class="badge badge-success">✓ 可用</span>' : '<span class="badge" style="background: #fef3c7; color: #92400e;">未下载</span>'}</td>
+                            <td>${runtimeBadge(status.marian)}</td>
+                            <td>${availabilityBadge(status.marian)}</td>
                             <td>
                                 ${marianDownloadStatus}
                             </td>
                             <td data-download-card>
-                                <button class="btn btn-sm" style="padding: 0.25rem 0.75rem; font-size: 0.875rem; background: #0f766e; color: white; border: none; border-radius: 0.375rem; cursor: pointer;" onclick="downloadMarianModel()">下载/转换</button>
+                                <div class="action-stack">
+                                    ${runtimeToggleButton('marian', status.marian)}
+                                    ${isModelEnabled(status.marian)
+                                        ? '<button class="btn btn-sm" style="padding: 0.25rem 0.75rem; font-size: 0.875rem; background: #0f766e; color: white; border: none; border-radius: 0.375rem; cursor: pointer;" onclick="downloadMarianModel()">下载/转换</button>'
+                                        : disabledActionButton()}
+                                </div>
                             </td>
                         </tr>
                         <tr>
@@ -1159,12 +1333,16 @@ async function loadModels() {
                             </td>
                             <td>多语言翻译</td>
                             <td>~1.2GB</td>
-                            <td>${status.m2m100.loaded ? '<span class="badge badge-success">✓ 可用</span>' : '<span class="badge" style="background: #fef3c7; color: #92400e;">未下载</span>'}</td>
+                            <td>${runtimeBadge(status.m2m100)}</td>
+                            <td>${availabilityBadge(status.m2m100)}</td>
                             <td>
                                 ${m2m100DownloadStatus}
                             </td>
                             <td data-download-card>
-                                ${modelActionButton(status.m2m100, 'm2m100', 'downloadM2M100Model', 'convertM2M100ModelToCT2')}
+                                <div class="action-stack">
+                                    ${runtimeToggleButton('m2m100', status.m2m100)}
+                                    ${modelActionButton(status.m2m100, 'm2m100', 'downloadM2M100Model', 'convertM2M100ModelToCT2')}
+                                </div>
                             </td>
                         </tr>
                         <tr>
@@ -1175,12 +1353,16 @@ async function loadModels() {
                             </td>
                             <td>多语言翻译</td>
                             <td>~4.5GB</td>
-                            <td>${status.m2m100_1_2b?.loaded ? '<span class="badge badge-success">✓ 可用</span>' : '<span class="badge" style="background: #fef3c7; color: #92400e;">未下载</span>'}</td>
+                            <td>${runtimeBadge(status.m2m100_1_2b)}</td>
+                            <td>${availabilityBadge(status.m2m100_1_2b)}</td>
                             <td>
                                 ${m2m100LargeDownloadStatus}
                             </td>
                             <td data-download-card>
-                                ${modelActionButton(status.m2m100_1_2b, 'm2m100_1_2b', 'downloadM2M100LargeModel', 'convertM2M100LargeModelToCT2')}
+                                <div class="action-stack">
+                                    ${runtimeToggleButton('m2m100_1_2b', status.m2m100_1_2b)}
+                                    ${modelActionButton(status.m2m100_1_2b, 'm2m100_1_2b', 'downloadM2M100LargeModel', 'convertM2M100LargeModelToCT2')}
+                                </div>
                             </td>
                         </tr>
                         <tr>
@@ -1191,12 +1373,16 @@ async function loadModels() {
                             </td>
                             <td>多语言翻译</td>
                             <td>~2.5GB+</td>
-                            <td>${status.nllb?.loaded ? '<span class="badge badge-success">✓ 可用</span>' : '<span class="badge" style="background: #fef3c7; color: #92400e;">未下载</span>'}</td>
+                            <td>${runtimeBadge(status.nllb)}</td>
+                            <td>${availabilityBadge(status.nllb)}</td>
                             <td>
                                 ${nllbDownloadStatus}
                             </td>
                             <td data-download-card>
-                                ${modelActionButton(status.nllb, 'nllb', 'downloadNLLBModel', 'convertNLLBModelToCT2')}
+                                <div class="action-stack">
+                                    ${runtimeToggleButton('nllb', status.nllb)}
+                                    ${modelActionButton(status.nllb, 'nllb', 'downloadNLLBModel', 'convertNLLBModelToCT2')}
+                                </div>
                             </td>
                         </tr>
                         ${causalLmRows}
@@ -1220,7 +1406,7 @@ async function loadModels() {
                             <span style="background: #e0f2fe; color: #0369a1; padding: 0.25rem 0.5rem; border-radius: 0.25rem; font-size: 0.8rem;">多语言</span>
                             <span style="background: #fef3c7; color: #92400e; padding: 0.25rem 0.5rem; border-radius: 0.25rem; font-size: 0.8rem; margin-left: 0.5rem;">~2.5GB+</span>
                         </div>
-                        <button class="btn" style="width: 100%; padding: 0.5rem; background: #10b981; color: white; border: none; border-radius: 0.375rem; cursor: pointer;" onclick="downloadNLLBModel(event)">下载/修复 NLLB</button>
+                        <button class="btn" ${isModelEnabled(status.nllb) ? '' : 'disabled'} style="width: 100%; padding: 0.5rem; background: ${isModelEnabled(status.nllb) ? '#10b981' : '#e5e7eb'}; color: ${isModelEnabled(status.nllb) ? 'white' : '#6b7280'}; border: none; border-radius: 0.375rem; cursor: ${isModelEnabled(status.nllb) ? 'pointer' : 'not-allowed'};" onclick="downloadNLLBModel(event)">${isModelEnabled(status.nllb) ? '下载/修复 NLLB' : 'NLLB 已暂停'}</button>
                     </div>
 
                     ${causalLmCards}
@@ -1235,8 +1421,8 @@ async function loadModels() {
                         </div>
                         <input id="opus-model-name" class="form-control" value="Helsinki-NLP/opus-mt-en-zh" placeholder="Helsinki-NLP/opus-mt-en-zh" style="width: 100%; padding: 0.5rem; border: 2px solid var(--border-color); border-radius: 0.5rem; margin-bottom: 0.75rem;">
                         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem;">
-                            <button class="btn" style="padding: 0.5rem; background: #10b981; color: white; border: none; border-radius: 0.375rem; cursor: pointer;" onclick="downloadCustomOpusMTModel(event)">下载模型</button>
-                            <button class="btn" style="padding: 0.5rem; background: #3b82f6; color: white; border: none; border-radius: 0.375rem; cursor: pointer;" onclick="downloadMarianModel()">常用列表</button>
+                            <button class="btn" ${isModelEnabled(status.marian) ? '' : 'disabled'} style="padding: 0.5rem; background: ${isModelEnabled(status.marian) ? '#10b981' : '#e5e7eb'}; color: ${isModelEnabled(status.marian) ? 'white' : '#6b7280'}; border: none; border-radius: 0.375rem; cursor: ${isModelEnabled(status.marian) ? 'pointer' : 'not-allowed'};" onclick="downloadCustomOpusMTModel(event)">${isModelEnabled(status.marian) ? '下载模型' : '已暂停'}</button>
+                            <button class="btn" ${isModelEnabled(status.marian) ? '' : 'disabled'} style="padding: 0.5rem; background: ${isModelEnabled(status.marian) ? '#3b82f6' : '#e5e7eb'}; color: ${isModelEnabled(status.marian) ? 'white' : '#6b7280'}; border: none; border-radius: 0.375rem; cursor: ${isModelEnabled(status.marian) ? 'pointer' : 'not-allowed'};" onclick="downloadMarianModel()">常用列表</button>
                         </div>
                     </div>
 
@@ -1248,7 +1434,7 @@ async function loadModels() {
                             <span style="background: #e0f2fe; color: #0369a1; padding: 0.25rem 0.5rem; border-radius: 0.25rem; font-size: 0.8rem;">高精度</span>
                             <span style="background: #fef3c7; color: #92400e; padding: 0.25rem 0.5rem; border-radius: 0.25rem; font-size: 0.8rem; margin-left: 0.5rem;">4.5GB</span>
                         </div>
-                        <button class="btn" style="width: 100%; padding: 0.5rem; background: #10b981; color: white; border: none; border-radius: 0.375rem; cursor: pointer;" onclick="downloadM2M100LargeModel(event)">下载/修复 1.2B</button>
+                        <button class="btn" ${isModelEnabled(status.m2m100_1_2b) ? '' : 'disabled'} style="width: 100%; padding: 0.5rem; background: ${isModelEnabled(status.m2m100_1_2b) ? '#10b981' : '#e5e7eb'}; color: ${isModelEnabled(status.m2m100_1_2b) ? 'white' : '#6b7280'}; border: none; border-radius: 0.375rem; cursor: ${isModelEnabled(status.m2m100_1_2b) ? 'pointer' : 'not-allowed'};" onclick="downloadM2M100LargeModel(event)">${isModelEnabled(status.m2m100_1_2b) ? '下载/修复 1.2B' : '1.2B 已暂停'}</button>
                     </div>
                 </div>
             </div>
@@ -1298,14 +1484,14 @@ async function loadModels() {
                     <div class="config-field">
                         <label for="default-model">默认模型</label>
                         <select id="default-model" class="form-control">
-                            <option value="argos" ${defaultModel === 'argos' ? 'selected' : ''}>Argos (快速)</option>
-                            <option value="marian" ${defaultModel === 'marian' ? 'selected' : ''}>MarianMT (准确)</option>
-                            <option value="m2m100" ${defaultModel === 'm2m100' ? 'selected' : ''}>M2M100 (多语言)</option>
-                            <option value="m2m100_1_2b" ${defaultModel === 'm2m100_1_2b' ? 'selected' : ''}>M2M100 1.2B (高精度)</option>
-                            <option value="nllb" ${defaultModel === 'nllb' ? 'selected' : ''}>NLLB-200 (多语言)</option>
-                            <option value="qwen3_1_7b" ${defaultModel === 'qwen3_1_7b' ? 'selected' : ''}>Qwen3 1.7B</option>
-                            <option value="gemma3_1b" ${defaultModel === 'gemma3_1b' ? 'selected' : ''}>Gemma 3 1B</option>
-                            <option value="qwen2_5_0_5b" ${defaultModel === 'qwen2_5_0_5b' ? 'selected' : ''}>Qwen2.5 0.5B</option>
+                            ${defaultModelOption('argos', 'Argos (快速)')}
+                            ${defaultModelOption('marian', 'MarianMT (准确)')}
+                            ${defaultModelOption('m2m100', 'M2M100 (多语言)')}
+                            ${defaultModelOption('m2m100_1_2b', 'M2M100 1.2B (高精度)')}
+                            ${defaultModelOption('nllb', 'NLLB-200 (多语言)')}
+                            ${defaultModelOption('qwen3_1_7b', 'Qwen3 1.7B')}
+                            ${defaultModelOption('gemma3_1b', 'Gemma 3 1B')}
+                            ${defaultModelOption('qwen2_5_0_5b', 'Qwen2.5 0.5B')}
                         </select>
                         <div class="field-hint">未显式指定模型的 API 请求会使用这里的默认模型</div>
                     </div>
@@ -1357,6 +1543,50 @@ async function loadModels() {
                 </div>
             </div>
         `;
+    }
+}
+
+async function toggleModelRuntime(event, modelId, enabled) {
+    const button = event?.currentTarget;
+    const actionText = enabled ? '启用' : '暂停';
+    const confirmed = confirm(
+        enabled
+            ? `确定要启用模型 ${modelId} 吗？\n\n启用后该模型可以继续接收翻译、下载和转换任务。`
+            : `确定要暂停模型 ${modelId} 吗？\n\n暂停后会停止该模型的翻译、下载和转换入口，并尽量释放已加载的运行实例。`
+    );
+
+    if (!confirmed) {
+        return;
+    }
+
+    const originalText = button?.textContent;
+    if (button) {
+        button.disabled = true;
+        button.textContent = `${actionText}中...`;
+    }
+
+    try {
+        const response = await fetch(`/admin/models/${encodeURIComponent(modelId)}/runtime`, {
+            method: 'POST',
+            headers: {
+                ...headers,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ enabled })
+        });
+        const result = await response.json();
+
+        if (!response.ok || !result.success) {
+            throw new Error(result.detail || result.message || `${actionText}失败`);
+        }
+
+        await loadModels();
+    } catch (error) {
+        alert(`${actionText}失败：${error.message}`);
+        if (button) {
+            button.disabled = false;
+            button.textContent = originalText;
+        }
     }
 }
 
