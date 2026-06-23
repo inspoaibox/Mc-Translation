@@ -100,30 +100,47 @@ class CausalLMTranslator:
     def _language_name(self, lang: str) -> str:
         return self.LANG_NAME_MAP.get(lang, lang)
 
+    def _build_system_prompt(self, source_lang: str, target_lang: str) -> str:
+        """构建系统提示词，定义翻译器的角色和规则"""
+        source = self._language_name(source_lang)
+        target = self._language_name(target_lang)
+
+        return (
+            f"You are a professional translator specializing in {source} to {target} translation.\n\n"
+            "Core principles:\n"
+            "- Output ONLY the translated text\n"
+            "- Never add explanations, notes, or meta-commentary\n"
+            "- Never include phrases like 'Here is the translation:' or 'Translation:'\n"
+            "- Preserve all formatting: line breaks, Markdown, HTML, code blocks, numbers\n"
+            "- Keep special tokens like {{variables}}, placeholders, and technical terms unchanged\n"
+            "- Maintain the original tone and structure\n\n"
+            "Your output must be pure translated content, ready to use directly."
+        )
+
     def _build_user_prompt(self, text: str, source_lang: str, target_lang: str) -> str:
         source = self._language_name(source_lang)
         target = self._language_name(target_lang)
 
         # 针对小模型（< 1B）使用极简提示词，避免指令泄露
         if self._is_small_model():
-            return (
-                f"Translate from {source} to {target}:\n\n{text}"
-            )
+            return f"Translate from {source} to {target}:\n\n{text}"
 
-        # 标准模型使用详细提示词
-        return (
-            f"Translate the following text from {source} to {target}.\n"
-            "Return only the translated text. Do not explain. Do not add notes.\n"
-            "Do not include reasoning or chain-of-thought. /no_think\n"
-            "Preserve line breaks, Markdown, HTML tags, placeholders, numbers, and code-like tokens.\n"
-            "If the input is a single fragment, return a single translated fragment.\n\n"
-            f"Text:\n{text}\n\n"
-            "Translation:\n"
-        )
+        # 标准模型：简洁的用户消息（系统提示词已定义规则）
+        return text
 
     def _render_prompt(self, text: str, source_lang: str, target_lang: str) -> str:
-        prompt = self._build_user_prompt(text, source_lang, target_lang)
-        messages = [{"role": "user", "content": prompt}]
+        user_content = self._build_user_prompt(text, source_lang, target_lang)
+
+        # 小模型不使用 system prompt（容易泄露）
+        if self._is_small_model():
+            messages = [{"role": "user", "content": user_content}]
+        else:
+            # 标准模型使用 system + user 结构
+            system_content = self._build_system_prompt(source_lang, target_lang)
+            messages = [
+                {"role": "system", "content": system_content},
+                {"role": "user", "content": user_content}
+            ]
 
         if self.tokenizer and getattr(self.tokenizer, "chat_template", None):
             try:
