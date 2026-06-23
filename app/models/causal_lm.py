@@ -279,10 +279,6 @@ class CausalLMTranslator:
             else:
                 max_input_token_count = input_width
 
-            # 检测截断警告
-            if input_width >= config.LLM_MAX_INPUT_TOKENS:
-                print(f"Warning: Input truncated at {config.LLM_MAX_INPUT_TOKENS} tokens. Some content may be lost.")
-
             pad_token_id = (
                 self.tokenizer.pad_token_id
                 if self.tokenizer.pad_token_id is not None

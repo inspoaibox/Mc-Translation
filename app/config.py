@@ -138,8 +138,10 @@ class Config:
     DEVICE = os.getenv("DEVICE", "cpu")
     TRANSLATION_MAX_NEW_TOKENS = int(os.getenv("TRANSLATION_MAX_NEW_TOKENS", "128"))
     TRANSLATION_BATCH_SIZE = int(os.getenv("TRANSLATION_BATCH_SIZE", "8"))
-    LLM_MAX_INPUT_TOKENS = int(os.getenv("LLM_MAX_INPUT_TOKENS", "1024"))
-    LLM_TRANSLATION_MAX_NEW_TOKENS = int(os.getenv("LLM_TRANSLATION_MAX_NEW_TOKENS", "512"))
+    # LLM 输入上限：使用模型官方支持的上下文长度
+    # Qwen2.5/Qwen3/Gemma3 默认支持 32K tokens
+    LLM_MAX_INPUT_TOKENS = int(os.getenv("LLM_MAX_INPUT_TOKENS", "8192"))
+    LLM_TRANSLATION_MAX_NEW_TOKENS = int(os.getenv("LLM_TRANSLATION_MAX_NEW_TOKENS", "4096"))
     LLM_TRANSLATION_BATCH_SIZE = int(os.getenv("LLM_TRANSLATION_BATCH_SIZE", "0"))
     TORCH_CPU_THREADS = int(os.getenv("TORCH_CPU_THREADS", "0"))
     MODEL_WARMUP_ENABLED = os.getenv("MODEL_WARMUP_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
