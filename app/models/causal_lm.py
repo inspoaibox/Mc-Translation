@@ -21,6 +21,16 @@ LABEL_PATTERN = re.compile(
     r"^(?:translation|translated text|result|output|译文|翻译结果)\s*[:：]\s*",
     re.IGNORECASE,
 )
+# 匹配提示词泄露：以"翻译"、"Translation"等开头的重复指令
+INSTRUCTION_LEAK_PATTERN = re.compile(
+    r"^(?:翻译|Translation|Translate|请保留|Please preserve|文本|Text|如果输入|If the input).*",
+    re.IGNORECASE
+)
+# 匹配重复的翻译结果标记
+REPEATED_MARKER_PATTERN = re.compile(
+    r"(?:translation|translated text|翻译|译文)[:：]\s*(?:translation|translated text|翻译|译文)[:：]",
+    re.IGNORECASE
+)
 
 
 class CausalLMTranslator:
@@ -50,6 +60,12 @@ class CausalLMTranslator:
         self.model = None
         self._load_lock = Lock()
         self._generation_lock = Lock()
+
+    def _is_small_model(self) -> bool:
+        """检测是否为小模型（< 1B），需要特殊处理"""
+        small_model_keywords = ["0.5b", "500m", "0_5b"]
+        model_lower = self.model_name.lower()
+        return any(keyword in model_lower for keyword in small_model_keywords)
 
     def _load_model(self):
         if self.model is not None:
@@ -87,6 +103,14 @@ class CausalLMTranslator:
     def _build_user_prompt(self, text: str, source_lang: str, target_lang: str) -> str:
         source = self._language_name(source_lang)
         target = self._language_name(target_lang)
+
+        # 针对小模型（< 1B）使用极简提示词，避免指令泄露
+        if self._is_small_model():
+            return (
+                f"Translate from {source} to {target}:\n\n{text}"
+            )
+
+        # 标准模型使用详细提示词
         return (
             f"Translate the following text from {source} to {target}.\n"
             "Return only the translated text. Do not explain. Do not add notes.\n"
@@ -123,12 +147,42 @@ class CausalLMTranslator:
     def _clean_output(self, output: str) -> str:
         text = THINKING_BLOCK_PATTERN.sub("", output or "").strip()
 
+        # 移除代码围栏
         fence_match = CODE_FENCE_PATTERN.match(text)
         if fence_match:
             text = fence_match.group(1).strip()
 
+        # 移除标签前缀（如 "Translation: "）
         text = LABEL_PATTERN.sub("", text).strip()
 
+        # 移除提示词泄露（小模型常见问题）
+        lines = text.split('\n')
+        cleaned_lines = []
+        skip_mode = False
+
+        for line in lines:
+            # 检测是否为泄露的指令
+            if INSTRUCTION_LEAK_PATTERN.match(line.strip()):
+                skip_mode = True
+                continue
+
+            # 检测到实际翻译内容后，停止跳过模式
+            stripped = line.strip()
+            if skip_mode and stripped and not any(
+                keyword in stripped.lower()
+                for keyword in ['翻译', 'translation', 'translate', '保留', 'preserve', 'markdown', 'html']
+            ):
+                skip_mode = False
+
+            if not skip_mode:
+                cleaned_lines.append(line)
+
+        text = '\n'.join(cleaned_lines).strip()
+
+        # 移除重复的标记
+        text = REPEATED_MARKER_PATTERN.sub("", text).strip()
+
+        # 尝试解析 JSON（某些模型可能返回 JSON 格式）
         try:
             parsed = json.loads(text)
             if isinstance(parsed, str):
@@ -136,10 +190,30 @@ class CausalLMTranslator:
         except json.JSONDecodeError:
             pass
 
+        # 移除开头和结尾的重复换行
+        text = text.strip()
+
+        # 如果输出过长且存在明显重复，截断到第一个完整翻译
+        if len(text) > len(output or "") * 0.8:
+            # 检测是否有内容重复（简单启发式：前半部分和后半部分相似）
+            mid = len(text) // 2
+            if mid > 50:
+                first_half = text[:mid].strip()
+                second_half = text[mid:].strip()
+                # 如果后半部分以前半部分开头，说明有重复
+                if second_half.startswith(first_half[:min(100, len(first_half))]):
+                    text = first_half
+
         return text.strip()
 
     def _max_new_tokens(self, input_token_count: int) -> int:
         from ..config import config
+
+        # 小模型使用更保守的 token 限制，避免生成过长内容
+        if self._is_small_model():
+            dynamic_limit = int(input_token_count * 1.5) + 16
+            max_limit = min(256, config.LLM_TRANSLATION_MAX_NEW_TOKENS)
+            return max(16, min(max_limit, dynamic_limit))
 
         dynamic_limit = int(input_token_count * 1.8) + 24
         return max(24, min(config.LLM_TRANSLATION_MAX_NEW_TOKENS, dynamic_limit))
@@ -190,23 +264,58 @@ class CausalLMTranslator:
                 else self.tokenizer.eos_token_id
             )
             with torch.inference_mode():
-                generated = self.model.generate(
-                    **inputs,
-                    do_sample=False,
-                    num_beams=1,
-                    use_cache=True,
-                    max_new_tokens=self._max_new_tokens(max_input_token_count),
-                    pad_token_id=pad_token_id,
-                    eos_token_id=self.tokenizer.eos_token_id,
-                )
+                # 小模型使用更严格的生成参数，减少胡言乱语
+                generation_kwargs = {
+                    "do_sample": False,
+                    "num_beams": 1,
+                    "use_cache": True,
+                    "max_new_tokens": self._max_new_tokens(max_input_token_count),
+                    "pad_token_id": pad_token_id,
+                    "eos_token_id": self.tokenizer.eos_token_id,
+                }
+
+                # 小模型添加重复惩罚和长度惩罚
+                if self._is_small_model():
+                    generation_kwargs.update({
+                        "repetition_penalty": 1.2,
+                        "length_penalty": 1.0,
+                    })
+
+                generated = self.model.generate(**inputs, **generation_kwargs)
 
         translated = []
         for row in generated:
             output_ids = row[input_width:]
             decoded = self.tokenizer.decode(output_ids, skip_special_tokens=True)
             cleaned = self._clean_output(decoded)
+
+            # 如果清理后结果为空，说明模型输出无效
             if not cleaned:
                 return None
+
+            # 额外验证：检查输出是否包含过多的提示词关键字（可能是泄露）
+            leak_keywords = ['translate', 'translation', 'preserve', 'markdown', 'html', '翻译', '保留']
+            keyword_count = sum(1 for keyword in leak_keywords if keyword in cleaned.lower())
+            # 如果关键词数量超过输出词数的 20%，可能是提示词泄露
+            word_count = len(cleaned.split())
+            if word_count > 5 and keyword_count > word_count * 0.2:
+                print(f"Warning: Possible prompt leak detected in output: {cleaned[:100]}...")
+                # 尝试提取实际内容（通常在冒号或换行后）
+                for separator in [':\n', ': ', '\n\n']:
+                    if separator in cleaned:
+                        parts = cleaned.split(separator)
+                        if len(parts) > 1 and parts[-1].strip():
+                            potential_translation = parts[-1].strip()
+                            # 验证提取的内容不再包含过多关键词
+                            potential_word_count = len(potential_translation.split())
+                            potential_keyword_count = sum(
+                                1 for keyword in leak_keywords
+                                if keyword in potential_translation.lower()
+                            )
+                            if potential_keyword_count < potential_word_count * 0.1:
+                                cleaned = potential_translation
+                                break
+
             translated.append(cleaned)
 
         return translated
