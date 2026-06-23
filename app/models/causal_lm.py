@@ -119,6 +119,15 @@ class CausalLMTranslator:
             "Your output must be complete translated content, ready to use directly."
         )
 
+    def _supports_system_role(self) -> bool:
+        """检测模型是否支持 system role"""
+        # Gemma 系列不支持 system role
+        model_lower = self.model_name.lower()
+        if "gemma" in model_lower:
+            return False
+        # 其他模型默认支持
+        return True
+
     def _build_user_prompt(self, text: str, source_lang: str, target_lang: str) -> str:
         source = self._language_name(source_lang)
         target = self._language_name(target_lang)
@@ -130,15 +139,27 @@ class CausalLMTranslator:
         # 标准模型：简洁的用户消息（系统提示词已定义规则）
         return text
 
-    def _render_prompt(self, text: str, source_lang: str, target_lang: str) -> str:
-        user_content = self._build_user_prompt(text, source_lang, target_lang)
+    def _build_user_prompt_with_instruction(self, text: str, source_lang: str, target_lang: str) -> str:
+        """为不支持 system role 的模型构建包含指令的 user prompt"""
+        source = self._language_name(source_lang)
+        target = self._language_name(target_lang)
 
+        system_content = self._build_system_prompt(source_lang, target_lang)
+        return f"{system_content}\n\nTranslate this text:\n{text}"
+
+    def _render_prompt(self, text: str, source_lang: str, target_lang: str) -> str:
         # 小模型不使用 system prompt（容易泄露）
         if self._is_small_model():
+            user_content = self._build_user_prompt(text, source_lang, target_lang)
+            messages = [{"role": "user", "content": user_content}]
+        elif not self._supports_system_role():
+            # 不支持 system role 的模型（如 Gemma）：将 system 内容合并到 user message
+            user_content = self._build_user_prompt_with_instruction(text, source_lang, target_lang)
             messages = [{"role": "user", "content": user_content}]
         else:
             # 标准模型使用 system + user 结构
             system_content = self._build_system_prompt(source_lang, target_lang)
+            user_content = self._build_user_prompt(text, source_lang, target_lang)
             messages = [
                 {"role": "system", "content": system_content},
                 {"role": "user", "content": user_content}
@@ -158,10 +179,19 @@ class CausalLMTranslator:
                     tokenize=False,
                     add_generation_prompt=True,
                 )
-            except Exception:
-                return prompt
+            except Exception as e:
+                # 如果模板渲染失败，回退到简单拼接
+                print(f"Warning: chat_template failed: {e}")
+                if len(messages) == 1:
+                    return messages[0]["content"]
+                else:
+                    return f"{messages[0]['content']}\n\n{messages[1]['content']}"
 
-        return prompt
+        # 没有 chat_template 的情况
+        if len(messages) == 1:
+            return messages[0]["content"]
+        else:
+            return f"{messages[0]['content']}\n\n{messages[1]['content']}"
 
     def _clean_output(self, output: str) -> str:
         text = THINKING_BLOCK_PATTERN.sub("", output or "").strip()
