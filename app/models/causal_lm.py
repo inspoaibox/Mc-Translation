@@ -21,9 +21,10 @@ LABEL_PATTERN = re.compile(
     r"^(?:translation|translated text|result|output|译文|翻译结果)\s*[:：]\s*",
     re.IGNORECASE,
 )
-# 匹配提示词泄露：以"翻译"、"Translation"等开头的重复指令
+# 匹配提示词泄露：更精确的模式，避免误删正常翻译
+# 只匹配完整的提示词指令行（通常单独成行，没有实际内容）
 INSTRUCTION_LEAK_PATTERN = re.compile(
-    r"^(?:翻译|Translation|Translate|请保留|Please preserve|文本|Text|如果输入|If the input).*",
+    r"^(?:翻译|Translation|Translate|请保留|Please preserve|文本|Text|如果输入|If the input)[：:\s]*(?:$|(?=[A-Z]|\n))",
     re.IGNORECASE
 )
 # 匹配重复的翻译结果标记
@@ -108,13 +109,14 @@ class CausalLMTranslator:
         return (
             f"You are a professional translator specializing in {source} to {target} translation.\n\n"
             "Core principles:\n"
-            "- Output ONLY the translated text\n"
-            "- Never add explanations, notes, or meta-commentary\n"
-            "- Never include phrases like 'Here is the translation:' or 'Translation:'\n"
-            "- Preserve all formatting: line breaks, Markdown, HTML, code blocks, numbers\n"
-            "- Keep special tokens like {{variables}}, placeholders, and technical terms unchanged\n"
-            "- Maintain the original tone and structure\n\n"
-            "Your output must be pure translated content, ready to use directly."
+            "1. Translate ALL content completely - never omit or skip any part\n"
+            "2. Output ONLY the translated text, no explanations or notes\n"
+            "3. Maintain one-to-one correspondence with the source text\n"
+            "4. Never add phrases like 'Here is the translation:' or 'Translation:'\n"
+            "5. Preserve all formatting: line breaks, Markdown, HTML, code blocks, numbers\n"
+            "6. Keep special tokens like {{variables}}, placeholders unchanged\n"
+            "7. Match the original tone, style, and structure exactly\n\n"
+            "Your output must be complete translated content, ready to use directly."
         )
 
     def _build_user_prompt(self, text: str, source_lang: str, target_lang: str) -> str:
@@ -169,30 +171,29 @@ class CausalLMTranslator:
         if fence_match:
             text = fence_match.group(1).strip()
 
-        # 移除标签前缀（如 "Translation: "）
+        # 移除标签前缀（如 "Translation: " 单独成行的情况）
         text = LABEL_PATTERN.sub("", text).strip()
 
         # 移除提示词泄露（小模型常见问题）
+        # 改进：只删除空洞的指令行，保留包含实际内容的行
         lines = text.split('\n')
         cleaned_lines = []
-        skip_mode = False
 
         for line in lines:
-            # 检测是否为泄露的指令
-            if INSTRUCTION_LEAK_PATTERN.match(line.strip()):
-                skip_mode = True
+            stripped = line.strip()
+
+            # 跳过空行
+            if not stripped:
+                cleaned_lines.append(line)
                 continue
 
-            # 检测到实际翻译内容后，停止跳过模式
-            stripped = line.strip()
-            if skip_mode and stripped and not any(
-                keyword in stripped.lower()
-                for keyword in ['翻译', 'translation', 'translate', '保留', 'preserve', 'markdown', 'html']
-            ):
-                skip_mode = False
+            # 检测是否为纯指令行（没有实际翻译内容）
+            # 只有当行内容非常短（< 20 字符）且完全匹配指令模式时才删除
+            if len(stripped) < 20 and INSTRUCTION_LEAK_PATTERN.match(stripped):
+                continue
 
-            if not skip_mode:
-                cleaned_lines.append(line)
+            # 保留所有其他行（包括以"翻译"等开头但包含实际内容的行）
+            cleaned_lines.append(line)
 
         text = '\n'.join(cleaned_lines).strip()
 
@@ -278,27 +279,31 @@ class CausalLMTranslator:
             else:
                 max_input_token_count = input_width
 
+            # 检测截断警告
+            if input_width >= config.LLM_MAX_INPUT_TOKENS:
+                print(f"Warning: Input truncated at {config.LLM_MAX_INPUT_TOKENS} tokens. Some content may be lost.")
+
             pad_token_id = (
                 self.tokenizer.pad_token_id
                 if self.tokenizer.pad_token_id is not None
                 else self.tokenizer.eos_token_id
             )
             with torch.inference_mode():
-                # 小模型使用更严格的生成参数，减少胡言乱语
+                # 使用 beam search 提高翻译质量
                 generation_kwargs = {
                     "do_sample": False,
-                    "num_beams": 1,
+                    "num_beams": 3,  # 使用 beam search 提高质量
                     "use_cache": True,
                     "max_new_tokens": self._max_new_tokens(max_input_token_count),
                     "pad_token_id": pad_token_id,
                     "eos_token_id": self.tokenizer.eos_token_id,
                 }
 
-                # 小模型添加重复惩罚和长度惩罚
+                # 小模型使用更保守的参数
                 if self._is_small_model():
                     generation_kwargs.update({
-                        "repetition_penalty": 1.2,
-                        "length_penalty": 1.0,
+                        "num_beams": 1,  # 小模型使用贪婪解码（beam search 太慢）
+                        "repetition_penalty": 1.05,  # 降低重复惩罚（之前 1.2 太高）
                     })
 
                 generated = self.model.generate(**inputs, **generation_kwargs)
