@@ -9,9 +9,17 @@ from ..config import config
 
 
 def generation_token_limit(input_token_count: int) -> int:
-    """Keep short translations from carrying a large generation ceiling."""
-    dynamic_limit = int(input_token_count * 1.6) + 12
-    return max(16, min(config.TRANSLATION_MAX_NEW_TOKENS, dynamic_limit))
+    """
+    计算翻译输出的 token 上限
+
+    翻译输出通常是输入的 1.5-2 倍：
+    - 英译中：缩短 30-50%
+    - 中译英：增长 50-100%
+
+    使用 2.0 倍数确保不截断
+    """
+    dynamic_limit = int(input_token_count * 2.0) + 32
+    return max(32, min(config.TRANSLATION_MAX_NEW_TOKENS, dynamic_limit))
 
 
 def batched(items: List[str], size: Optional[int] = None):

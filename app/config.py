@@ -136,7 +136,9 @@ class Config:
 
     # 设备配置
     DEVICE = os.getenv("DEVICE", "cpu")
-    TRANSLATION_MAX_NEW_TOKENS = int(os.getenv("TRANSLATION_MAX_NEW_TOKENS", "128"))
+    # 传统翻译模型（MarianMT/M2M100/NLLB）输出限制
+    # 从 128 增加到 512，避免长文本翻译截断
+    TRANSLATION_MAX_NEW_TOKENS = int(os.getenv("TRANSLATION_MAX_NEW_TOKENS", "512"))
     TRANSLATION_BATCH_SIZE = int(os.getenv("TRANSLATION_BATCH_SIZE", "8"))
     # LLM 输入上限：使用模型官方支持的上下文长度
     # Qwen2.5/Qwen3/Gemma3 默认支持 32K tokens

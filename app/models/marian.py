@@ -244,7 +244,7 @@ class MarianTranslator:
                     with torch.inference_mode():
                         translated = model.generate(
                             **inputs,
-                            num_beams=1,
+                            num_beams=3,
                             do_sample=False,
                             use_cache=True,
                             max_new_tokens=generation_token_limit(inputs["input_ids"].shape[1])
@@ -270,7 +270,7 @@ class MarianTranslator:
                 with torch.inference_mode():
                     translated = model.generate(
                         **inputs,
-                        num_beams=1,
+                        num_beams=3,
                         do_sample=False,
                         use_cache=True,
                         max_new_tokens=generation_token_limit(inputs["input_ids"].shape[1])

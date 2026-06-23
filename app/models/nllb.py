@@ -144,7 +144,7 @@ class NLLBTranslator:
                 token_ids = self.ct2_tokenizer.encode(
                     segment,
                     truncation=True,
-                    max_length=512
+                    max_length=1024
                 )
             return self.ct2_tokenizer.convert_ids_to_tokens(token_ids)
 
@@ -231,14 +231,14 @@ class NLLBTranslator:
                             return_tensors="pt",
                             padding=True,
                             truncation=True,
-                            max_length=512
+                            max_length=1024
                         ).to(self.device)
 
                     with torch.inference_mode():
                         translated = self.model.generate(
                             **inputs,
                             forced_bos_token_id=forced_bos_token_id,
-                            num_beams=1,
+                            num_beams=3,
                             do_sample=False,
                             use_cache=True,
                             max_new_tokens=generation_token_limit(inputs["input_ids"].shape[1])
@@ -259,14 +259,14 @@ class NLLBTranslator:
                         segment,
                         return_tensors="pt",
                         truncation=True,
-                        max_length=512
+                        max_length=1024
                     ).to(self.device)
 
                 with torch.inference_mode():
                     translated = self.model.generate(
                         **inputs,
                         forced_bos_token_id=forced_bos_token_id,
-                        num_beams=1,
+                        num_beams=3,
                         do_sample=False,
                         use_cache=True,
                         max_new_tokens=generation_token_limit(inputs["input_ids"].shape[1])
