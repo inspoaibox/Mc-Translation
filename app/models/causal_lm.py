@@ -206,17 +206,46 @@ class CausalLMTranslator:
 
         return text.strip()
 
-    def _max_new_tokens(self, input_token_count: int) -> int:
+    def _max_new_tokens(self, input_token_count: int, source_lang: str = "en", target_lang: str = "zh") -> int:
         from ..config import config
 
-        # 小模型使用更保守的 token 限制，避免生成过长内容
-        if self._is_small_model():
-            dynamic_limit = int(input_token_count * 1.5) + 16
-            max_limit = min(256, config.LLM_TRANSLATION_MAX_NEW_TOKENS)
-            return max(16, min(max_limit, dynamic_limit))
+        # 根据语言对估算翻译长度比例
+        # 基于经验数据：不同语言对的平均长度变化
+        lang_pair_ratios = {
+            # 英译中/日/韩：通常缩短（英文单词 → 表意文字）
+            ("en", "zh"): 0.7,
+            ("en", "ja"): 0.8,
+            ("en", "ko"): 0.75,
+            # 中/日/韩译英：通常增长（表意文字 → 英文单词）
+            ("zh", "en"): 2.0,
+            ("ja", "en"): 2.0,
+            ("ko", "en"): 1.8,
+            # 欧洲语言互译：长度相近
+            ("en", "es"): 1.15,
+            ("en", "fr"): 1.15,
+            ("en", "de"): 1.2,
+            ("en", "it"): 1.1,
+            ("en", "pt"): 1.15,
+            ("en", "ru"): 1.0,
+            # 其他常见对
+            ("zh", "ja"): 1.1,
+            ("zh", "ko"): 1.1,
+        }
 
-        dynamic_limit = int(input_token_count * 1.8) + 24
-        return max(24, min(config.LLM_TRANSLATION_MAX_NEW_TOKENS, dynamic_limit))
+        # 获取语言对比例，默认 1.5 倍（保守估计）
+        ratio = lang_pair_ratios.get((source_lang, target_lang), 1.5)
+
+        # 小模型使用更保守的限制，但考虑语言对特性
+        if self._is_small_model():
+            # 基础限制：根据语言对调整
+            dynamic_limit = int(input_token_count * ratio) + 32
+            # 小模型的绝对上限：512（之前的 256 太小）
+            max_limit = min(512, config.LLM_TRANSLATION_MAX_NEW_TOKENS)
+            return max(32, min(max_limit, dynamic_limit))
+
+        # 标准模型：更宽松的限制
+        dynamic_limit = int(input_token_count * ratio * 1.2) + 48
+        return max(48, min(config.LLM_TRANSLATION_MAX_NEW_TOKENS, dynamic_limit))
 
     def _batch_size(self) -> int:
         from ..config import config
@@ -269,7 +298,7 @@ class CausalLMTranslator:
                     "do_sample": False,
                     "num_beams": 1,
                     "use_cache": True,
-                    "max_new_tokens": self._max_new_tokens(max_input_token_count),
+                    "max_new_tokens": self._max_new_tokens(max_input_token_count, source_lang, target_lang),
                     "pad_token_id": pad_token_id,
                     "eos_token_id": self.tokenizer.eos_token_id,
                 }
