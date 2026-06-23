@@ -68,6 +68,48 @@ class CausalLMTranslator:
         model_lower = self.model_name.lower()
         return any(keyword in model_lower for keyword in small_model_keywords)
 
+    def _get_few_shot_examples(self, source_lang: str, target_lang: str) -> str:
+        """为小模型生成 few-shot 示例，帮助理解翻译任务"""
+        source = self._language_name(source_lang)
+        target = self._language_name(target_lang)
+
+        # 常见语言对的示例
+        examples_map = {
+            ("zh", "en"): [
+                ("你好", "Hello"),
+                ("世界", "World"),
+                ("谢谢", "Thank you"),
+            ],
+            ("en", "zh"): [
+                ("Hello", "你好"),
+                ("World", "世界"),
+                ("Thank you", "谢谢"),
+            ],
+            ("zh", "ja"): [
+                ("你好", "こんにちは"),
+                ("谢谢", "ありがとう"),
+            ],
+            ("ja", "zh"): [
+                ("こんにちは", "你好"),
+                ("ありがとう", "谢谢"),
+            ],
+        }
+
+        # 获取示例（如果没有则使用通用格式）
+        examples = examples_map.get((source_lang, target_lang), [
+            ("Example", "示例"),
+            ("Test", "测试"),
+        ])
+
+        # 构建 few-shot prompt
+        lines = []
+        for src_text, tgt_text in examples:
+            lines.append(f"{source}: {src_text}")
+            lines.append(f"{target}: {tgt_text}")
+            lines.append("")  # 空行分隔
+
+        return "\n".join(lines)
+
     def _load_model(self):
         if self.model is not None:
             return
@@ -132,9 +174,11 @@ class CausalLMTranslator:
         source = self._language_name(source_lang)
         target = self._language_name(target_lang)
 
-        # 针对小模型（< 1B）使用极简提示词，避免指令泄露
+        # 针对小模型（< 1B）使用 few-shot prompt，引导模型理解任务
         if self._is_small_model():
-            return f"Translate from {source} to {target}:\n\n{text}"
+            # 构建 few-shot 示例
+            examples = self._get_few_shot_examples(source_lang, target_lang)
+            return f"{examples}\n{source}: {text}\n{target}:"
 
         # 标准模型：简洁的用户消息（系统提示词已定义规则）
         return text
