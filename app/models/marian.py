@@ -216,9 +216,12 @@ class MarianTranslator:
 
             backend = self._select_backend(model_name)
             if backend == "ctranslate2":
+                # 优先使用 CTranslate2 后端；若 CT2 模型不可用或翻译失败，
+                # 回退到 transformers 后端（下方代码）。
                 ct2_result = self._translate_with_ct2(text, source_lang, target_lang, model_name)
-                if ct2_result.text is not None or ct2_result.metrics.backend == "ctranslate2":
+                if ct2_result.text is not None:
                     return ct2_result
+                print(f"MarianMT CTranslate2 不可用或失败，回退到 transformers: {model_name}")
 
             # 加载模型
             metrics.actual_model_name = model_name

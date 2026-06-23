@@ -62,11 +62,28 @@ class CausalLMTranslator:
         self._load_lock = Lock()
         self._generation_lock = Lock()
 
+    # 匹配模型名中的参数量，如 "0.5b"、"500m"、"1_7b"、"1b"。
+    # 同时兼容下划线分隔（HuggingFace 命名常写作 "Qwen2.5-0_5B"）。
+    _PARAM_SIZE_PATTERN = re.compile(r"(\d+(?:[._]\d+)?)\s*([bm])", re.IGNORECASE)
+
     def _is_small_model(self) -> bool:
-        """检测是否为小模型（< 1B），需要特殊处理"""
-        small_model_keywords = ["0.5b", "500m", "0_5b"]
+        """
+        检测是否为小模型（参数量 < 1B），需要 few-shot 等特殊处理。
+
+        优先从模型名中解析参数量；解析失败时回退到关键词匹配，
+        兼容历史命名（"0_5b"）以及未来不含规模后缀的模型。
+        """
         model_lower = self.model_name.lower()
-        return any(keyword in model_lower for keyword in small_model_keywords)
+
+        match = self._PARAM_SIZE_PATTERN.search(model_lower)
+        if match:
+            value = float(match.group(1).replace("_", "."))
+            unit = match.group(2).lower()
+            params_b = value if unit == "b" else value / 1000.0
+            return params_b < 1.0
+
+        # 回退：未解析出参数量时按已知小模型关键词判定。
+        return any(kw in model_lower for kw in ("0.5b", "500m", "0_5b"))
 
     def _get_few_shot_examples(self, source_lang: str, target_lang: str) -> str:
         """为小模型生成 few-shot 示例，帮助理解翻译任务"""

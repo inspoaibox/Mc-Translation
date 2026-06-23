@@ -194,16 +194,13 @@ class NLLBTranslator:
             backend = self._select_backend()
             if backend == "ctranslate2":
                 try:
-                    return self._translate_with_ct2(text, source_lang, target_lang)
+                    ct2_result = self._translate_with_ct2(text, source_lang, target_lang)
+                    if ct2_result.text is not None:
+                        return ct2_result
+                    # CT2 模型不可用（文件缺失等）：回退 transformers，而非直接返回空。
+                    print(f"NLLB CTranslate2 不可用或返回空，回退到 transformers: {self.model_name}")
                 except Exception as e:
-                    print(f"NLLB CTranslate2 翻译失败: {str(e)}")
-                    return TranslationResult(
-                        None,
-                        TranslationMetrics(
-                            backend="ctranslate2",
-                            actual_model_name=self.model_name
-                        )
-                    )
+                    print(f"NLLB CTranslate2 翻译失败，回退到 transformers: {str(e)}")
 
             load_start = time.perf_counter()
             self._load_model()

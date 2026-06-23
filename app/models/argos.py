@@ -3,9 +3,9 @@ Argos Translate 模型封装
 """
 import argostranslate.package
 import argostranslate.translate
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 import time
-from .formatting import translate_preserving_line_format
+from .formatting import translate_preserving_line_format_batched
 from .metrics import TranslationMetrics, TranslationResult
 
 class ArgosTranslator:
@@ -78,6 +78,8 @@ class ArgosTranslator:
 
             inference_time = 0.0
 
+            # Argos 没有原生批量 API，这里把多个简单行聚合后逐个调用，
+            # 既统一使用其它模型采用的批量格式化路径，又保持逐段翻译语义不变。
             def translate_segment(segment: str) -> Optional[str]:
                 nonlocal inference_time
                 segment_start = time.perf_counter()
@@ -86,8 +88,14 @@ class ArgosTranslator:
                 metrics.segment_count += 1
                 return translated
 
+            def translate_segments(segments: List[str]) -> Optional[List[str]]:
+                # Argos 无批量推理能力，逐段调用以保留现有行为。
+                return [translate_segment(segment) for segment in segments]
+
             format_start = time.perf_counter()
-            translated_text = translate_preserving_line_format(text, translate_segment)
+            translated_text = translate_preserving_line_format_batched(
+                text, translate_segments, translate_segment
+            )
             format_total = time.perf_counter() - format_start
             metrics.inference_time = inference_time
             metrics.format_time = max(0.0, format_total - inference_time)

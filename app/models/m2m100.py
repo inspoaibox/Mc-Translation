@@ -15,8 +15,11 @@ class M2M100Translator:
     """M2M100 翻译器"""
 
     # 语言代码映射（M2M100 使用特定的语言代码）
+    # M2M100 不区分简繁中文，"zt"（繁中）映射到 "zh" 做近似翻译，
+    # 与 NLLB / CausalLM 的 12 语言矩阵对齐，避免该语言对直接返回 None。
     LANG_CODE_MAP = {
         "zh": "zh",
+        "zt": "zh",
         "en": "en",
         "ja": "ja",
         "ko": "ko",
@@ -24,6 +27,9 @@ class M2M100Translator:
         "de": "de",
         "es": "es",
         "ru": "ru",
+        "ar": "ar",
+        "hi": "hi",
+        "th": "th",
     }
 
     def __init__(self, model_name: str = "facebook/m2m100_418M", device: str = "cpu"):
@@ -199,16 +205,13 @@ class M2M100Translator:
             backend = self._select_backend()
             if backend == "ctranslate2":
                 try:
-                    return self._translate_with_ct2(text, source_lang, target_lang)
+                    ct2_result = self._translate_with_ct2(text, source_lang, target_lang)
+                    if ct2_result.text is not None:
+                        return ct2_result
+                    # CT2 模型不可用（文件缺失等）：回退 transformers，而非直接返回空。
+                    print(f"M2M100 CTranslate2 不可用或返回空，回退到 transformers: {self.model_name}")
                 except Exception as e:
-                    print(f"M2M100 CTranslate2 翻译失败: {str(e)}")
-                    return TranslationResult(
-                        None,
-                        TranslationMetrics(
-                            backend="ctranslate2",
-                            actual_model_name=self.model_name
-                        )
-                    )
+                    print(f"M2M100 CTranslate2 翻译失败，回退到 transformers: {str(e)}")
 
             # 确保模型已加载
             load_start = time.perf_counter()
